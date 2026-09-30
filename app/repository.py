@@ -6,9 +6,10 @@ from datetime import datetime, date, time
 # UTILITÁRIOS DA OPERAÇÃO INDUSTRIAL
 # ==========================================
 
+
 def descobrir_turno_atual() -> int:
     hora_atual = datetime.now().time()
-    
+
     if time(6, 0) <= hora_atual < time(14, 0):
         return 1
     elif time(14, 0) <= hora_atual < time(22, 0):
@@ -21,10 +22,11 @@ def descobrir_turno_atual() -> int:
 # TELEMETRIA E HISTÓRICO DOS SENSORES (IoT)
 # ==========================================
 
+
 async def salvar_leitura(conn: asyncpg.Connection, dados: dict) -> bool:
     try:
         turno_atual = descobrir_turno_atual()
-            
+
         async with conn.transaction():
             query_log = """
                 INSERT INTO logs_maquinas 
@@ -32,17 +34,17 @@ async def salvar_leitura(conn: asyncpg.Connection, dados: dict) -> bool:
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8);
             """
             await conn.execute(
-                query_log, 
-                dados['maquina_id'], 
-                dados['status_atual'], 
-                dados['vibracao_rms'], 
-                dados['corrente_ampere'],
-                dados['tensao_volt'],
-                dados['potencia_watt'],
+                query_log,
+                dados["maquina_id"],
+                dados["status_atual"],
+                dados["vibracao_rms"],
+                dados["corrente_ampere"],
+                dados["tensao_volt"],
+                dados["potencia_watt"],
                 turno_atual,
-                dados.get('frequencia_hz', 0.0)
+                dados.get("frequencia_hz", 0.0),
             )
-            
+
             query_upsert = """
                 INSERT INTO status_atual_maquinas 
                 (maquina_id, status_atual, vibracao_rms, corrente_ampere, tensao_volt, potencia_watt, frequencia_hz, momento_da_leitura)
@@ -58,16 +60,16 @@ async def salvar_leitura(conn: asyncpg.Connection, dados: dict) -> bool:
                     momento_da_leitura = NOW();
             """
             await conn.execute(
-                query_upsert, 
-                dados['maquina_id'], 
-                dados['status_atual'], 
-                dados['vibracao_rms'], 
-                dados['corrente_ampere'],
-                dados['tensao_volt'],
-                dados['potencia_watt'],
-                dados.get('frequencia_hz', 0.0)
+                query_upsert,
+                dados["maquina_id"],
+                dados["status_atual"],
+                dados["vibracao_rms"],
+                dados["corrente_ampere"],
+                dados["tensao_volt"],
+                dados["potencia_watt"],
+                dados.get("frequencia_hz", 0.0),
             )
-            
+
         return True
     except Exception as e:
         print(f"Erro no SQL ao salvar: {e}")
@@ -118,22 +120,21 @@ async def obter_status_por_id(conn: asyncpg.Connection, maquina_id: int) -> dict
             WHERE s.maquina_id = $1 AND m.deletado_em IS NULL;
         """
         registro = await conn.fetchrow(sql, maquina_id)
-        
-        
+
         return dict(registro) if registro else None
-        
+
     except Exception as e:
         print(f"Erro ao obter status da máquina por ID no Repository: {e}")
         return None
 
 
 async def buscar_historico_logs(
-    conn: asyncpg.Connection, 
-    maquina_id: int | None, 
-    periodo: str, 
-    data_inicio: date | None, 
+    conn: asyncpg.Connection,
+    maquina_id: int | None,
+    periodo: str,
+    data_inicio: date | None,
     data_fim: date | None,
-    limite: int = 500  
+    limite: int = 500,
 ):
     try:
         sql = """
@@ -151,7 +152,7 @@ async def buscar_historico_logs(
             FROM logs_maquinas
             WHERE 1=1
         """
-        
+
         parametros = []
         contador = 1
 
@@ -163,9 +164,13 @@ async def buscar_historico_logs(
         if periodo == "hoje":
             sql += " AND horario_do_log >= CURRENT_DATE::timestamp"
         elif periodo == "semana":
-            sql += " AND horario_do_log >= (CURRENT_DATE - INTERVAL '7 days')::timestamp"
+            sql += (
+                " AND horario_do_log >= (CURRENT_DATE - INTERVAL '7 days')::timestamp"
+            )
         elif periodo == "mes":
-            sql += " AND horario_do_log >= (CURRENT_DATE - INTERVAL '30 days')::timestamp"
+            sql += (
+                " AND horario_do_log >= (CURRENT_DATE - INTERVAL '30 days')::timestamp"
+            )
         elif periodo == "customizado" and data_inicio and data_fim:
             sql += f" AND horario_do_log >= ${contador}::timestamp AND horario_do_log < (${contador + 1}::date + 1)::timestamp"
             parametros.append(data_inicio)
@@ -173,7 +178,7 @@ async def buscar_historico_logs(
             contador += 2
 
         sql += " ORDER BY horario_do_log DESC"
-        
+
         sql += f" LIMIT {limite};"
 
         registros = await conn.fetch(sql, *parametros)
@@ -188,6 +193,7 @@ async def buscar_historico_logs(
 # GESTÃO DE RECURSOS HUMANOS (FUNCIONÁRIOS)
 # ==========================================
 
+
 async def cadastrar_funcionario(conn: asyncpg.Connection, dados: dict) -> int | None:
     try:
         sql = """
@@ -197,12 +203,12 @@ async def cadastrar_funcionario(conn: asyncpg.Connection, dados: dict) -> int | 
         """
         id_gerado = await conn.fetchval(
             sql,
-            dados['nome'],
-            dados['cargo'],
-            dados['turno_trabalho'],
-            dados['email'],
-            dados['senha_hash'], 
-            dados.get('ativo', True)
+            dados["nome"],
+            dados["cargo"],
+            dados["turno_trabalho"],
+            dados["email"],
+            dados["senha_hash"],
+            dados.get("ativo", True),
         )
         return id_gerado
     except Exception as e:
@@ -219,15 +225,17 @@ async def listar_funcionarios_ativos(conn: asyncpg.Connection):
             ORDER BY nome ASC;
         """
         registros = await conn.fetch(sql)
-        
+
         return [dict(r) for r in registros]
-        
+
     except Exception as e:
         print(f"Erro ao listar funcionários: {e}")
         return []
 
 
-async def soft_delete_funcionario(conn: asyncpg.Connection, funcionario_id: int) -> bool:
+async def soft_delete_funcionario(
+    conn: asyncpg.Connection, funcionario_id: int
+) -> bool:
     try:
         sql = """
             UPDATE funcionarios
@@ -241,7 +249,9 @@ async def soft_delete_funcionario(conn: asyncpg.Connection, funcionario_id: int)
         return False
 
 
-async def obter_funcionario_por_id(conn: asyncpg.Connection, funcionario_id: int) -> dict | None:
+async def obter_funcionario_por_id(
+    conn: asyncpg.Connection, funcionario_id: int
+) -> dict | None:
     try:
         sql = """
             SELECT id, nome, cargo, turno_trabalho, ativo, email
@@ -255,26 +265,33 @@ async def obter_funcionario_por_id(conn: asyncpg.Connection, funcionario_id: int
         return None
 
 
-async def atualizar_funcionario(conn: asyncpg.Connection, funcionario_id: int, dados: dict) -> bool:
+async def atualizar_funcionario(
+    conn: asyncpg.Connection, funcionario_id: int, dados: dict
+) -> bool:
     try:
         campos = ["nome = $1", "cargo = $2", "turno_trabalho = $3", "email = $4"]
-        valores = [dados['nome'], dados['cargo'], dados['turno_trabalho'], dados['email']]
-        
-        if dados.get('senha_hash') is not None:
+        valores = [
+            dados["nome"],
+            dados["cargo"],
+            dados["turno_trabalho"],
+            dados["email"],
+        ]
+
+        if dados.get("senha_hash") is not None:
             campos.append("senha_hash = $5")
-            valores.append(dados['senha_hash'])
+            valores.append(dados["senha_hash"])
             sql_id_param = "$6"
         else:
             sql_id_param = "$5"
-            
+
         valores.append(funcionario_id)
-        
+
         sql = f"""
             UPDATE funcionarios
             SET {", ".join(campos)}
             WHERE id = {sql_id_param} AND deletado_em IS NULL;
         """
-        
+
         status = await conn.execute(sql, *valores)
         return status == "UPDATE 1"
     except asyncpg.exceptions.UniqueViolationError:
@@ -284,7 +301,9 @@ async def atualizar_funcionario(conn: asyncpg.Connection, funcionario_id: int, d
         return False
 
 
-async def obter_funcionario_por_email(conn: asyncpg.Connection, email: str) -> dict | None:
+async def obter_funcionario_por_email(
+    conn: asyncpg.Connection, email: str
+) -> dict | None:
     sql = """
         SELECT id, nome, email, senha_hash 
         FROM funcionarios 
@@ -298,7 +317,10 @@ async def obter_funcionario_por_email(conn: asyncpg.Connection, email: str) -> d
 # GERENCIAMENTO CADASTRAL DE MÁQUINAS
 # ==========================================
 
-async def cadastrar_maquina(conn: asyncpg.Connection, dados: dict) -> asyncpg.Record | None:
+
+async def cadastrar_maquina(
+    conn: asyncpg.Connection, dados: dict
+) -> asyncpg.Record | None:
     try:
         sql = """
             INSERT INTO maquinas (tag_maquina, nome_maquina, setor)
@@ -307,9 +329,9 @@ async def cadastrar_maquina(conn: asyncpg.Connection, dados: dict) -> asyncpg.Re
         """
         registro_gerado = await conn.fetchrow(
             sql,
-            dados['tag_maquina'].upper().strip(),
-            dados['nome_maquina'].strip(),
-            dados.get('setor')
+            dados["tag_maquina"].upper().strip(),
+            dados["nome_maquina"].strip(),
+            dados.get("setor"),
         )
         return registro_gerado
     except asyncpg.UniqueViolationError:
@@ -334,7 +356,9 @@ async def listar_maquinas_cadastradas(conn: asyncpg.Connection):
         return []
 
 
-async def obter_maquina_por_id(conn: asyncpg.Connection, maquina_id: int) -> dict | None:
+async def obter_maquina_por_id(
+    conn: asyncpg.Connection, maquina_id: int
+) -> dict | None:
     try:
         sql = """
             SELECT id, tag_maquina, nome_maquina, setor, data_cadastro
@@ -348,7 +372,9 @@ async def obter_maquina_por_id(conn: asyncpg.Connection, maquina_id: int) -> dic
         return None
 
 
-async def atualizar_maquina(conn: asyncpg.Connection, maquina_id: int, dados: dict) -> bool:
+async def atualizar_maquina(
+    conn: asyncpg.Connection, maquina_id: int, dados: dict
+) -> bool:
     try:
         sql = """
             UPDATE maquinas
@@ -360,10 +386,10 @@ async def atualizar_maquina(conn: asyncpg.Connection, maquina_id: int, dados: di
         """
         status = await conn.execute(
             sql,
-            dados['tag_maquina'].upper().strip(),
-            dados['nome_maquina'].strip(),
-            dados.get('setor'),
-            maquina_id
+            dados["tag_maquina"].upper().strip(),
+            dados["nome_maquina"].strip(),
+            dados.get("setor"),
+            maquina_id,
         )
         return status == "UPDATE 1"
     except asyncpg.UniqueViolationError:
@@ -391,6 +417,7 @@ async def soft_delete_maquina(conn: asyncpg.Connection, maquina_id: int) -> bool
 # MANUTENÇÃO (PREVENTIVA / PREDITIVA)
 # ==========================================
 
+
 async def agendar_manutencao(conn: asyncpg.Connection, dados: dict) -> int | None:
     try:
         sql = """
@@ -400,10 +427,10 @@ async def agendar_manutencao(conn: asyncpg.Connection, dados: dict) -> int | Non
         """
         id_gerado = await conn.fetchval(
             sql,
-            dados['maquina_id'],
-            dados['descricao_servico'].strip(),
-            dados['data_agendada'],
-            dados['tipo_manutencao']
+            dados["maquina_id"],
+            dados["descricao_servico"].strip(),
+            dados["data_agendada"],
+            dados["tipo_manutencao"],
         )
         return id_gerado
     except Exception as e:
@@ -439,7 +466,9 @@ async def listar_manutencoes_detalhadas(conn: asyncpg.Connection):
         return []
 
 
-async def obter_manutencao_por_id(conn: asyncpg.Connection, manutencao_id: int) -> dict | None:
+async def obter_manutencao_por_id(
+    conn: asyncpg.Connection, manutencao_id: int
+) -> dict | None:
     try:
         sql = """
             SELECT 
@@ -459,7 +488,9 @@ async def obter_manutencao_por_id(conn: asyncpg.Connection, manutencao_id: int) 
         return None
 
 
-async def atualizar_dados_manutencao(conn: asyncpg.Connection, manutencao_id: int, dados: dict) -> bool:
+async def atualizar_dados_manutencao(
+    conn: asyncpg.Connection, manutencao_id: int, dados: dict
+) -> bool:
     try:
         sql = """
             UPDATE manutencao_preventiva
@@ -470,10 +501,10 @@ async def atualizar_dados_manutencao(conn: asyncpg.Connection, manutencao_id: in
         """
         status = await conn.execute(
             sql,
-            dados['descricao_servico'].strip(),
-            dados['data_agendada'],
-            dados['tipo_manutencao'],
-            manutencao_id
+            dados["descricao_servico"].strip(),
+            dados["data_agendada"],
+            dados["tipo_manutencao"],
+            manutencao_id,
         )
         return status == "UPDATE 1"
     except Exception as e:
@@ -481,7 +512,9 @@ async def atualizar_dados_manutencao(conn: asyncpg.Connection, manutencao_id: in
         return False
 
 
-async def concluir_ordem_manutencao(conn: asyncpg.Connection, manutencao_id: int, funcionario_id: int) -> bool:
+async def concluir_ordem_manutencao(
+    conn: asyncpg.Connection, manutencao_id: int, funcionario_id: int
+) -> bool:
     try:
         sql = """
             UPDATE manutencao_preventiva
