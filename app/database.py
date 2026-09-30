@@ -1,5 +1,5 @@
 import asyncpg
-import os # noqa: F401
+import os  # noqa: F401
 from .dbconfig import credenciais, DATABASE_URL_RAILWAY
 
 if DATABASE_URL_RAILWAY:

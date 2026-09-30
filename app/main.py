@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
 from pydantic import BaseModel
 from datetime import datetime, date
-import os 
+import os
 import asyncpg
 import warnings
 from passlib.context import CryptContext
