@@ -341,7 +341,8 @@ async def listar_funcionarios(conn: asyncpg.Connection = Depends(get_db)):
     tags=["CRUD Funcionários"],
 )
 async def cadastrar_funcionario(
-    funcionario: FuncionarioCreate, conn: asyncpg.Connection = Depends(get_db)
+    funcionario: FuncionarioCreate, 
+    conn: asyncpg.Connection = Depends(get_db)
 ):
     """
     Cadastra um novo funcionário com e-mail normalizado (minúsculas/sem espaços)
@@ -349,6 +350,7 @@ async def cadastrar_funcionario(
     """
     dados_repositorio = funcionario.model_dump()
 
+    # Normalização de dados
     dados_repositorio["email"] = funcionario.email.lower().strip()
 
     senha_puro = dados_repositorio.pop("senha")
@@ -359,8 +361,8 @@ async def cadastrar_funcionario(
 
         if not id_gerado:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Erro ao processar o cadastro do funcionário.",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Erro interno ao registrar o funcionário no banco de dados.",
             )
 
         return {
@@ -370,12 +372,13 @@ async def cadastrar_funcionario(
             "turno_trabalho": funcionario.turno_trabalho,
             "ativo": True,
             "email": dados_repositorio["email"],
+            "perfil": funcionario.perfil  # Incluído com o novo campo de RBAC
         }
 
     except asyncpg.UniqueViolationError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="O e-mail informado já está cadastrado no sistema.",
+            detail="Já existe um funcionário ATIVO cadastrado com este e-mail.",
         )
 
 
@@ -440,7 +443,7 @@ async def put_funcionario(
         )
         if not sucesso:
             raise HTTPException(
-                status_code=404, detail="Funcionário não encontrado para atualização."
+                status_code=404, detail="Funcionário não encontrado ou inativo."
             )
 
         return {
@@ -450,11 +453,12 @@ async def put_funcionario(
             "turno_trabalho": funcionario_dados.turno_trabalho,
             "email": funcionario_dados.email,
             "ativo": funcionario_dados.ativo,
+            "perfil": funcionario_dados.perfil,
         }
     except asyncpg.UniqueViolationError:
         raise HTTPException(
             status_code=400,
-            detail="O e-mail informado já está em uso por outro operador.",
+            detail="O e-mail informado já está em uso por outro usuário ativo.",
         )
 
 
