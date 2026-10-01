@@ -1,6 +1,7 @@
 import os
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+
 class Credenciais(BaseSettings):
     db_user: str = ""
     db_password: str = ""
@@ -9,7 +10,10 @@ class Credenciais(BaseSettings):
     db_name: str = ""
     api_env: str = "development"
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+    )
+
 
 credenciais = Credenciais()
 

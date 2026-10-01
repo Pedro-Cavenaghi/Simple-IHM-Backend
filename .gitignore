@@ -4,3 +4,5 @@ venv/
 .venv/
 README.txt
 *.pyc
+.coverage
+coverage.xml
