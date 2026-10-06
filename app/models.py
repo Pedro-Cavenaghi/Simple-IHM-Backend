@@ -74,10 +74,17 @@ class LogMaquinaResponse(ResponseBase):
 class FuncionarioCreate(BaseModel):
     nome: str = Field(..., min_length=3, max_length=100, description="Nome completo")
     cargo: str = Field(..., min_length=2, max_length=50, description="Cargo ou função")
-    turno_trabalho: int = Field(..., ge=1, le=3, description="Turno de trabalho (1, 2 ou 3)")
+    turno_trabalho: int = Field(
+        ..., ge=1, le=3, description="Turno de trabalho (1, 2 ou 3)"
+    )
     email: EmailStr = Field(..., description="E-mail corporativo que será o login")
-    senha: str = Field(..., min_length=6, description="Senha em texto puro para criptografia")
-    perfil: Literal["ADMIN", "OPERADOR", "MANUTENCAO"] = Field("OPERADOR", description="Perfil de acesso")
+    senha: str = Field(
+        ..., min_length=6, description="Senha em texto puro para criptografia"
+    )
+    perfil: Literal["ADMIN", "OPERADOR", "MANUTENCAO"] = Field(
+        "OPERADOR", description="Perfil de acesso"
+    )
+
 
 class FuncionarioResponse(ResponseBase):
     id: int
@@ -88,13 +95,18 @@ class FuncionarioResponse(ResponseBase):
     email: str
     perfil: str
 
+
 class FuncionarioUpdate(BaseModel):
     nome: str = Field(..., min_length=3, max_length=100, description="Nome completo")
     cargo: str = Field(..., min_length=2, max_length=50, description="Cargo ou função")
-    turno_trabalho: int = Field(..., ge=1, le=3, description="Turno de trabalho (1, 2 ou 3)")
+    turno_trabalho: int = Field(
+        ..., ge=1, le=3, description="Turno de trabalho (1, 2 ou 3)"
+    )
     email: EmailStr = Field(..., description="E-mail corporativo")
     ativo: bool = Field(True, description="Status do funcionário no sistema")
-    perfil: Literal["ADMIN", "OPERADOR", "MANUTENCAO"] = Field("OPERADOR", description="Perfil de acesso do funcionário")
+    perfil: Literal["ADMIN", "OPERADOR", "MANUTENCAO"] = Field(
+        "OPERADOR", description="Perfil de acesso do funcionário"
+    )
 
 
 # ==========================================

@@ -6,3 +6,4 @@ README.txt
 *.pyc
 .coverage
 coverage.xml
+app/auth.py

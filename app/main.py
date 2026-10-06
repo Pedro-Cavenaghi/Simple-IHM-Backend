@@ -341,8 +341,7 @@ async def listar_funcionarios(conn: asyncpg.Connection = Depends(get_db)):
     tags=["CRUD Funcionários"],
 )
 async def cadastrar_funcionario(
-    funcionario: FuncionarioCreate, 
-    conn: asyncpg.Connection = Depends(get_db)
+    funcionario: FuncionarioCreate, conn: asyncpg.Connection = Depends(get_db)
 ):
     """
     Cadastra um novo funcionário com e-mail normalizado (minúsculas/sem espaços)
@@ -372,7 +371,7 @@ async def cadastrar_funcionario(
             "turno_trabalho": funcionario.turno_trabalho,
             "ativo": True,
             "email": dados_repositorio["email"],
-            "perfil": funcionario.perfil  # Incluído com o novo campo de RBAC
+            "perfil": funcionario.perfil,  # Incluído com o novo campo de RBAC
         }
 
     except asyncpg.UniqueViolationError:
