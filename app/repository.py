@@ -447,21 +447,28 @@ async def soft_delete_maquina(conn: asyncpg.Connection, maquina_id: int) -> bool
 # ==========================================
 
 
-async def agendar_manutencao(conn: asyncpg.Connection, dados: dict) -> int | None:
+async def agendar_manutencao(conn: asyncpg.Connection, dados: dict) -> dict | None:
     try:
+        maquina_ativa = await conn.fetchval(
+            "SELECT id FROM maquinas WHERE id = $1 AND deletado_em IS NULL;",
+            dados["maquina_id"],
+        )
+        if not maquina_ativa:
+            return None
+
         sql = """
             INSERT INTO manutencao_preventiva (maquina_id, descricao_servico, data_agendada, tipo_manutencao)
             VALUES ($1, $2, $3, $4)
-            RETURNING id;
+            RETURNING id, maquina_id, descricao_servico, data_agendada, tipo_manutencao, concluida, data_conclusao_real, funcionario_id;
         """
-        id_gerado = await conn.fetchval(
+        registro = await conn.fetchrow(
             sql,
             dados["maquina_id"],
             dados["descricao_servico"].strip(),
             dados["data_agendada"],
             dados["tipo_manutencao"],
         )
-        return id_gerado
+        return dict(registro) if registro else None
     except Exception as e:
         print(f"Erro ao agendar manutenção no Repository: {e}")
         return None
@@ -485,7 +492,7 @@ async def listar_manutencoes_detalhadas(conn: asyncpg.Connection):
             FROM manutencao_preventiva mp
             LEFT JOIN maquinas m ON mp.maquina_id = m.id
             LEFT JOIN funcionarios f ON mp.funcionario_id = f.id
-            WHERE mp.deletado_em IS NULL
+            WHERE mp.deletado_em IS NULL AND (m.deletado_em IS NULL OR m.id IS NULL)
             ORDER BY mp.concluida ASC, mp.data_agendada ASC;
         """
         registros = await conn.fetch(sql)
@@ -550,7 +557,7 @@ async def concluir_ordem_manutencao(
             SET concluida = TRUE,
                 data_conclusao_real = NOW(),
                 funcionario_id = $1
-            WHERE id = $2 AND concluida = FALSE;
+            WHERE id = $2 AND concluida = FALSE AND deletado_em IS NULL;
         """
         status = await conn.execute(sql, funcionario_id, manutencao_id)
         return status == "UPDATE 1"

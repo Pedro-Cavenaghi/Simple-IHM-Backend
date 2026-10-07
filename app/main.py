@@ -26,7 +26,6 @@ from .models import (
     FuncionarioUpdate,
     ManutencaoPreventivaCreate,
     ManutencaoPreventivaUpdate,
-    ManutencaoPreventivaConcluir,
     ManutencaoPreventivaResponse,
     ManutencaoPreventivaDetalhadaResponse,
     LogMaquinaResponse,
@@ -355,16 +354,22 @@ async def atualizar_cadastro_maquina(
         )
 
 
-# --- ENDPOINTS DO CRUD DO DASHBOARD (FUNCIONÁRIOS) ---
+# ==========================================
+# ENDPOINTS DO CRUD DO DASHBOARD (FUNCIONÁRIOS)
+# ==========================================
 
 
 @app.get(
     "/funcionarios",
-    dependencies=[Depends(auth.PermissaoRequerida(["ADMIN"]))],
     response_model=list[FuncionarioResponse],
     tags=["CRUD Funcionários"],
 )
-async def listar_funcionarios(conn: asyncpg.Connection = Depends(get_db)):
+async def listar_funcionarios(
+    conn: asyncpg.Connection = Depends(get_db),
+    usuario_atual: FuncionarioResponse = Depends(
+        auth.PermissaoRequerida(["ADMIN"])
+    ),
+):
     """
     Retorna a lista de funcionários ativos (que não sofreram soft delete) para a tabela do Dashboard.
     """
@@ -374,17 +379,20 @@ async def listar_funcionarios(conn: asyncpg.Connection = Depends(get_db)):
 
 @app.post(
     "/funcionarios",
-    dependencies=[Depends(auth.PermissaoRequerida(["ADMIN"]))],
     response_model=FuncionarioResponse,
     status_code=status.HTTP_201_CREATED,
     tags=["CRUD Funcionários"],
 )
 async def cadastrar_funcionario(
-    funcionario: FuncionarioCreate, conn: asyncpg.Connection = Depends(get_db)
+    funcionario: FuncionarioCreate,
+    conn: asyncpg.Connection = Depends(get_db),
+    usuario_atual: FuncionarioResponse = Depends(
+        auth.PermissaoRequerida(["ADMIN"])
+    ),
 ):
     """
     Cadastra um novo funcionário com e-mail normalizado (minúsculas/sem espaços)
-    e hash de senha seguro.
+    e hash de senha seguro. Registra o evento no audit_logs vinculando ao ADMIN executante.
     """
     dados_repositorio = funcionario.model_dump()
 
@@ -403,6 +411,16 @@ async def cadastrar_funcionario(
                 detail="Erro interno ao registrar o funcionário no banco de dados.",
             )
 
+        # 📝 AUDITORIA: Registra a criação do novo funcionário
+        await repository.registrar_auditoria(
+            conn=conn,
+            usuario_id=usuario_atual.id,
+            acao="CRIAR_FUNCIONARIO",
+            entidade="funcionarios",
+            entidade_id=id_gerado,
+            detalhes=f"Criou o funcionário '{funcionario.nome}' ({dados_repositorio['email']}) com perfil '{funcionario.perfil}'.",
+        )
+
         return {
             "id": id_gerado,
             "nome": funcionario.nome,
@@ -410,7 +428,7 @@ async def cadastrar_funcionario(
             "turno_trabalho": funcionario.turno_trabalho,
             "ativo": True,
             "email": dados_repositorio["email"],
-            "perfil": funcionario.perfil,  # Incluído com o novo campo de RBAC
+            "perfil": funcionario.perfil,
         }
 
     except asyncpg.UniqueViolationError:
@@ -422,12 +440,15 @@ async def cadastrar_funcionario(
 
 @app.get(
     "/funcionarios/{funcionario_id}",
-    dependencies=[Depends(auth.PermissaoRequerida(["ADMIN"]))],
     response_model=FuncionarioResponse,
     tags=["CRUD Funcionários"],
 )
 async def get_funcionario_por_id(
-    funcionario_id: int, conn: asyncpg.Connection = Depends(get_db)
+    funcionario_id: int,
+    conn: asyncpg.Connection = Depends(get_db),
+    usuario_atual: FuncionarioResponse = Depends(
+        auth.PermissaoRequerida(["ADMIN"])
+    ),
 ):
     """
     Retorna os detalhes de um funcionário específico pelo ID.
@@ -440,32 +461,8 @@ async def get_funcionario_por_id(
     return funcionario
 
 
-@app.delete(
-    "/funcionarios/{funcionario_id}",
-    dependencies=[Depends(auth.PermissaoRequerida(["ADMIN"]))],
-    tags=["CRUD Funcionários"],
-)
-async def deletar_funcionario(
-    funcionario_id: int, conn: asyncpg.Connection = Depends(get_db)
-):
-    """
-    Aplica Soft Delete em um funcionário do sistema. O registro permanece no banco para auditoria.
-    """
-    sucesso = await repository.soft_delete_funcionario(conn, funcionario_id)
-    if not sucesso:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Funcionário não encontrado ou já deletado.",
-        )
-    return {
-        "status": "Sucesso",
-        "mensagem": f"Funcionário {funcionario_id} desativado logicamente.",
-    }
-
-
 @app.put(
     "/funcionarios/{funcionario_id}",
-    dependencies=[Depends(auth.PermissaoRequerida(["ADMIN"]))],
     response_model=FuncionarioResponse,
     tags=["CRUD Funcionários"],
 )
@@ -473,12 +470,14 @@ async def put_funcionario(
     funcionario_id: int,
     funcionario_dados: FuncionarioUpdate,
     conn: asyncpg.Connection = Depends(get_db),
+    usuario_atual: FuncionarioResponse = Depends(
+        auth.PermissaoRequerida(["ADMIN"])
+    ),
 ):
     """
     Atualiza os dados cadastrais administrativos de um funcionário.
     A alteração de senha é bloqueada e isolada deste fluxo.
     """
-
     dados_repositorio = funcionario_dados.model_dump()
 
     try:
@@ -489,6 +488,16 @@ async def put_funcionario(
             raise HTTPException(
                 status_code=404, detail="Funcionário não encontrado ou inativo."
             )
+
+        # 📝 AUDITORIA: Registra a alteração dos dados cadastrais
+        await repository.registrar_auditoria(
+            conn=conn,
+            usuario_id=usuario_atual.id,
+            acao="ATUALIZAR_FUNCIONARIO",
+            entidade="funcionarios",
+            entidade_id=funcionario_id,
+            detalhes=f"Atualizou o cadastro do funcionário '{funcionario_dados.nome}' (Perfil: '{funcionario_dados.perfil}').",
+        )
 
         return {
             "id": funcionario_id,
@@ -506,48 +515,97 @@ async def put_funcionario(
         )
 
 
-# --- ENDPOINTS DO PLANO DE MANUTENÇÃO (PREVENTIVA / PREDITIVA) ---
+@app.delete(
+    "/funcionarios/{funcionario_id}",
+    tags=["CRUD Funcionários"],
+)
+async def deletar_funcionario(
+    funcionario_id: int,
+    conn: asyncpg.Connection = Depends(get_db),
+    usuario_atual: FuncionarioResponse = Depends(
+        auth.PermissaoRequerida(["ADMIN"])
+    ),
+):
+    """
+    Aplica Soft Delete em um funcionário do sistema. O registro permanece no banco para auditoria.
+    """
+    sucesso = await repository.soft_delete_funcionario(conn, funcionario_id)
+    if not sucesso:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Funcionário não encontrado ou já deletado.",
+        )
+
+    # 📝 AUDITORIA: Registra a desativação (soft delete)
+    await repository.registrar_auditoria(
+        conn=conn,
+        usuario_id=usuario_atual.id,
+        acao="DESATIVAR_FUNCIONARIO",
+        entidade="funcionarios",
+        entidade_id=funcionario_id,
+        detalhes=f"Desativou (soft delete) o funcionário ID {funcionario_id}.",
+    )
+
+    return {
+        "status": "Sucesso",
+        "mensagem": f"Funcionário {funcionario_id} desativado logicamente.",
+    }
+
+
+# ==========================================
+# ENDPOINTS DO PLANO DE MANUTENÇÃO (PREVENTIVA / PREDITIVA)
+# ==========================================
 
 
 @app.post(
     "/manutencoes",
-    dependencies=[Depends(auth.PermissaoRequerida(["ADMIN", "MANUTENCAO"]))],
     response_model=ManutencaoPreventivaResponse,
     status_code=status.HTTP_201_CREATED,
     tags=["Plano de Manutenção"],
 )
 async def agendar_nova_manutencao(
-    manutencao: ManutencaoPreventivaCreate, conn: asyncpg.Connection = Depends(get_db)
+    manutencao: ManutencaoPreventivaCreate,
+    conn: asyncpg.Connection = Depends(get_db),
+    usuario_atual: FuncionarioResponse = Depends(
+        auth.PermissaoRequerida(["ADMIN", "MANUTENCAO"])
+    ),
 ):
     """
     Agenda uma nova intervenção (Preventiva ou Preditiva) para uma máquina da planta.
     A ordem nasce com o status 'concluida = false'.
     """
-    id_gerado = await repository.agendar_manutencao(conn, manutencao.model_dump())
-    if not id_gerado:
+    nova_manutencao = await repository.agendar_manutencao(conn, manutencao.model_dump())
+    
+    if not nova_manutencao:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Erro ao agendar manutenção. Verifique se o maquina_id informado existe.",
+            detail="Erro ao agendar manutenção. Verifique se a máquina informada existe e está ativa.",
         )
-    return {
-        "id": id_gerado,
-        "maquina_id": manutencao.maquina_id,
-        "descricao_servico": manutencao.descricao_servico,
-        "data_agendada": manutencao.data_agendada,
-        "concluida": False,
-        "data_conclusao_real": None,
-        "funcionario_id": None,
-        "tipo_manutencao": manutencao.tipo_manutencao,
-    }
+
+    # 📝 AUDITORIA: Registra o agendamento vinculando ao usuário logado
+    await repository.registrar_auditoria(
+        conn=conn,
+        usuario_id=usuario_atual.id,
+        acao="AGENDAR_MANUTENCAO",
+        entidade="manutencao_preventiva",
+        entidade_id=nova_manutencao["id"],
+        detalhes=f"Agendou manutenção '{nova_manutencao['tipo_manutencao']}' para a Máquina ID {nova_manutencao['maquina_id']}.",
+    )
+
+    return nova_manutencao
 
 
 @app.get(
     "/manutencoes",
-    dependencies=[Depends(auth.PermissaoRequerida(["ADMIN", "MANUTENCAO"]))],
     response_model=list[ManutencaoPreventivaDetalhadaResponse],
     tags=["Plano de Manutenção"],
 )
-async def listar_todas_manutencoes(conn: asyncpg.Connection = Depends(get_db)):
+async def listar_todas_manutencoes(
+    conn: asyncpg.Connection = Depends(get_db),
+    usuario_atual: FuncionarioResponse = Depends(
+        auth.PermissaoRequerida(["ADMIN", "MANUTENCAO"])
+    ),
+):
     """
     Retorna a lista completa de manutenções trazendo as tags/nomes das máquinas
     e os nomes dos técnicos via LEFT JOIN (ideal para a tabela do Dashboard).
@@ -557,12 +615,15 @@ async def listar_todas_manutencoes(conn: asyncpg.Connection = Depends(get_db)):
 
 @app.get(
     "/manutencoes/{manutencao_id}",
-    dependencies=[Depends(auth.PermissaoRequerida(["ADMIN", "MANUTENCAO"]))],
     response_model=ManutencaoPreventivaDetalhadaResponse,
     tags=["Plano de Manutenção"],
 )
 async def obter_manutencao_por_id(
-    manutencao_id: int, conn: asyncpg.Connection = Depends(get_db)
+    manutencao_id: int,
+    conn: asyncpg.Connection = Depends(get_db),
+    usuario_atual: FuncionarioResponse = Depends(
+        auth.PermissaoRequerida(["ADMIN", "MANUTENCAO"])
+    ),
 ):
     """
     Busca os detalhes completos de uma ordem de manutenção específica pelo ID.
@@ -578,7 +639,6 @@ async def obter_manutencao_por_id(
 
 @app.put(
     "/manutencoes/{manutencao_id}",
-    dependencies=[Depends(auth.PermissaoRequerida(["ADMIN", "MANUTENCAO"]))],
     response_model=ManutencaoPreventivaDetalhadaResponse,
     tags=["Plano de Manutenção"],
 )
@@ -586,6 +646,9 @@ async def atualizar_dados_manutencao(
     manutencao_id: int,
     dados_novos: ManutencaoPreventivaUpdate,
     conn: asyncpg.Connection = Depends(get_db),
+    usuario_atual: FuncionarioResponse = Depends(
+        auth.PermissaoRequerida(["ADMIN", "MANUTENCAO"])
+    ),
 ):
     """
     Modifica a descrição, data ou tipo de uma manutenção, desde que ela ainda esteja ABERTA.
@@ -600,33 +663,55 @@ async def atualizar_dados_manutencao(
             detail="Não foi possível atualizar. A ordem pode não existir ou já está CONCLUÍDA.",
         )
 
+    # 📝 AUDITORIA: Registra a atualização do agendamento
+    await repository.registrar_auditoria(
+        conn=conn,
+        usuario_id=usuario_atual.id,
+        acao="ATUALIZAR_MANUTENCAO",
+        entidade="manutencao_preventiva",
+        entidade_id=manutencao_id,
+        detalhes=f"Atualizou dados/agendamento da ordem de manutenção ID {manutencao_id}.",
+    )
+
     registro_atualizado = await repository.obter_manutencao_por_id(conn, manutencao_id)
     return registro_atualizado
 
 
 @app.patch(
     "/manutencoes/{manutencao_id}/concluir",
-    dependencies=[Depends(auth.PermissaoRequerida(["ADMIN", "MANUTENCAO"]))],
     response_model=ManutencaoPreventivaDetalhadaResponse,
     tags=["Plano de Manutenção"],
 )
 async def concluir_ordem_manutencao(
     manutencao_id: int,
-    encerramento: ManutencaoPreventivaConcluir,
     conn: asyncpg.Connection = Depends(get_db),
+    usuario_atual: FuncionarioResponse = Depends(
+        auth.PermissaoRequerida(["ADMIN", "MANUTENCAO"])
+    ),
 ):
     """
-    Dá baixa/encerra a ordem de manutenção. O banco registrará o timestamp exato do NOW().
-    Retorna o objeto detalhado com os nomes atualizados via JOIN para renderização imediata do histórico técnico.
+    Dá baixa/encerra a ordem de manutenção. O banco registrará o timestamp exato do NOW()
+    e atribuirá o técnico logado no JWT.
     """
+    # Usa o ID do usuário autenticado no JWT para dar baixa na ordem
     sucesso = await repository.concluir_ordem_manutencao(
-        conn, manutencao_id, encerramento.funcionario_id
+        conn, manutencao_id, usuario_atual.id
     )
     if not sucesso:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Falha ao encerrar ordem. Verifique se o técnico existe ou se a ordem já foi fechada.",
+            detail="Falha ao encerrar ordem. Verifique se a ordem existe ou se já foi fechada.",
         )
+
+    # 📝 AUDITORIA: Registra o encerramento da manutenção
+    await repository.registrar_auditoria(
+        conn=conn,
+        usuario_id=usuario_atual.id,
+        acao="CONCLUIR_MANUTENCAO",
+        entidade="manutencao_preventiva",
+        entidade_id=manutencao_id,
+        detalhes=f"Concluiu a ordem de manutenção ID {manutencao_id}.",
+    )
 
     registro_atualizado = await repository.obter_manutencao_por_id(conn, manutencao_id)
     return registro_atualizado
@@ -634,11 +719,14 @@ async def concluir_ordem_manutencao(
 
 @app.delete(
     "/manutencoes/{manutencao_id}",
-    dependencies=[Depends(auth.PermissaoRequerida(["ADMIN", "MANUTENCAO"]))],
     tags=["Plano de Manutenção"],
 )
 async def deletar_manutencao_logica(
-    manutencao_id: int, conn: asyncpg.Connection = Depends(get_db)
+    manutencao_id: int,
+    conn: asyncpg.Connection = Depends(get_db),
+    usuario_atual: FuncionarioResponse = Depends(
+        auth.PermissaoRequerida(["ADMIN", "MANUTENCAO"])
+    ),
 ):
     """
     Aplica exclusão lógica (Soft Delete) em um agendamento, desde que a ordem esteja aberta.
@@ -649,6 +737,17 @@ async def deletar_manutencao_logica(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Não é possível remover. A ordem pode não existir, já foi concluída ou já foi excluída.",
         )
+
+    # 📝 AUDITORIA: Registra a remoção lógica
+    await repository.registrar_auditoria(
+        conn=conn,
+        usuario_id=usuario_atual.id,
+        acao="DELETAR_MANUTENCAO",
+        entidade="manutencao_preventiva",
+        entidade_id=manutencao_id,
+        detalhes=f"Cancelou/desativou (soft delete) a ordem de manutenção ID {manutencao_id}.",
+    )
+
     return {
         "status": "Sucesso",
         "mensagem": f"Ordem {manutencao_id} desativada logicamente.",
