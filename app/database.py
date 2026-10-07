@@ -1,3 +1,4 @@
+# Teste 1
 import asyncpg
 from .dbconfig import credenciais, DATABASE_URL_RAILWAY
 

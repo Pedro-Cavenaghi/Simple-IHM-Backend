@@ -1,3 +1,4 @@
+# Teste 1
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Depends, status, Query
 from fastapi.responses import FileResponse

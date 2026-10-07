@@ -1,3 +1,4 @@
+# Teste 1
 import asyncpg
 from datetime import datetime, date, time
 

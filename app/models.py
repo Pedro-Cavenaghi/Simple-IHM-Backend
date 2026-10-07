@@ -1,3 +1,4 @@
+# Teste 1
 from enum import Enum
 from pydantic import BaseModel, Field, EmailStr, ConfigDict
 from datetime import datetime, date
