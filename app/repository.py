@@ -19,6 +19,34 @@ def descobrir_turno_atual() -> int:
 
 
 # ==========================================
+# LOGS DE AUDITORIA
+# ==========================================
+
+
+async def registrar_auditoria(
+    conn: asyncpg.Connection,
+    usuario_id: int | None,
+    acao: str,
+    entidade: str,
+    entidade_id: int | None = None,
+    detalhes: str | None = None,
+) -> bool:
+    """
+    Grava um evento de auditoria no banco de dados.
+    """
+    sql = """
+        INSERT INTO audit_logs (usuario_id, acao, entidade, entidade_id, detalhes)
+        VALUES ($1, $2, $3, $4, $5);
+    """
+    try:
+        await conn.execute(sql, usuario_id, acao, entidade, entidade_id, detalhes)
+        return True
+    except Exception as e:
+        print(f"Erro ao registrar auditoria no Repository: {e}")
+        return False
+
+
+# ==========================================
 # TELEMETRIA E HISTÓRICO DOS SENSORES (IoT)
 # ==========================================
 

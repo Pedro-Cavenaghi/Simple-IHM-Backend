@@ -12,6 +12,7 @@ from passlib.context import CryptContext
 
 from .database import Database, get_db
 import app.repository as repository
+from app import auth
 
 # Importações internas
 from .models import (
@@ -193,19 +194,55 @@ async def listar_historico_de_logs(
 @app.post("/login", tags=["Autenticação"])
 async def login(credenciais: LoginRequest, conn: asyncpg.Connection = Depends(get_db)):
     email_normalizado = credenciais.email.lower().strip()
-
     funcionario = await repository.obter_funcionario_por_email(conn, email_normalizado)
 
-    if not funcionario:
-        raise HTTPException(status_code=401, detail="Credenciais inválidas")
+    if not funcionario or not pwd_context.verify(
+        credenciais.senha, funcionario["senha_hash"]
+    ):
+        # Auditoria de tentativa falha
+        if funcionario:
+            await repository.registrar_auditoria(
+                conn=conn,
+                usuario_id=funcionario["id"],
+                acao="LOGIN_FALHA",
+                entidade="funcionarios",
+                entidade_id=funcionario["id"],
+                detalhes="Tentativa de login com senha incorreta",
+            )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Credenciais inválidas",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
-    if not pwd_context.verify(credenciais.senha, funcionario["senha_hash"]):
-        raise HTTPException(status_code=401, detail="Credenciais inválidas")
+    # Gera JWT
+    access_token = auth.criar_token_acesso(
+        dados={
+            "sub": str(funcionario["id"]),
+            "email": funcionario["email"],
+            "perfil": funcionario["perfil"],
+        }
+    )
+
+    # Auditoria de login bem-sucedido
+    await repository.registrar_auditoria(
+        conn=conn,
+        usuario_id=funcionario["id"],
+        acao="LOGIN_SUCESSO",
+        entidade="funcionarios",
+        entidade_id=funcionario["id"],
+        detalhes=f"Login realizado com sucesso ({funcionario['perfil']})",
+    )
 
     return {
-        "status": "Sucesso",
-        "usuario_id": funcionario["id"],
-        "nome": funcionario["nome"],
+        "access_token": access_token,
+        "token_type": "bearer",
+        "usuario": {
+            "id": funcionario["id"],
+            "nome": funcionario["nome"],
+            "email": funcionario["email"],
+            "perfil": funcionario["perfil"],
+        },
     }
 
 
@@ -323,6 +360,7 @@ async def atualizar_cadastro_maquina(
 
 @app.get(
     "/funcionarios",
+    dependencies=[Depends(auth.PermissaoRequerida(["ADMIN"]))],
     response_model=list[FuncionarioResponse],
     tags=["CRUD Funcionários"],
 )
@@ -336,6 +374,7 @@ async def listar_funcionarios(conn: asyncpg.Connection = Depends(get_db)):
 
 @app.post(
     "/funcionarios",
+    dependencies=[Depends(auth.PermissaoRequerida(["ADMIN"]))],
     response_model=FuncionarioResponse,
     status_code=status.HTTP_201_CREATED,
     tags=["CRUD Funcionários"],
@@ -383,6 +422,7 @@ async def cadastrar_funcionario(
 
 @app.get(
     "/funcionarios/{funcionario_id}",
+    dependencies=[Depends(auth.PermissaoRequerida(["ADMIN"]))],
     response_model=FuncionarioResponse,
     tags=["CRUD Funcionários"],
 )
@@ -400,7 +440,11 @@ async def get_funcionario_por_id(
     return funcionario
 
 
-@app.delete("/funcionarios/{funcionario_id}", tags=["CRUD Funcionários"])
+@app.delete(
+    "/funcionarios/{funcionario_id}",
+    dependencies=[Depends(auth.PermissaoRequerida(["ADMIN"]))],
+    tags=["CRUD Funcionários"],
+)
 async def deletar_funcionario(
     funcionario_id: int, conn: asyncpg.Connection = Depends(get_db)
 ):
@@ -421,6 +465,7 @@ async def deletar_funcionario(
 
 @app.put(
     "/funcionarios/{funcionario_id}",
+    dependencies=[Depends(auth.PermissaoRequerida(["ADMIN"]))],
     response_model=FuncionarioResponse,
     tags=["CRUD Funcionários"],
 )
@@ -466,6 +511,7 @@ async def put_funcionario(
 
 @app.post(
     "/manutencoes",
+    dependencies=[Depends(auth.PermissaoRequerida(["ADMIN", "MANUTENCAO"]))],
     response_model=ManutencaoPreventivaResponse,
     status_code=status.HTTP_201_CREATED,
     tags=["Plano de Manutenção"],
@@ -497,6 +543,7 @@ async def agendar_nova_manutencao(
 
 @app.get(
     "/manutencoes",
+    dependencies=[Depends(auth.PermissaoRequerida(["ADMIN", "MANUTENCAO"]))],
     response_model=list[ManutencaoPreventivaDetalhadaResponse],
     tags=["Plano de Manutenção"],
 )
@@ -510,6 +557,7 @@ async def listar_todas_manutencoes(conn: asyncpg.Connection = Depends(get_db)):
 
 @app.get(
     "/manutencoes/{manutencao_id}",
+    dependencies=[Depends(auth.PermissaoRequerida(["ADMIN", "MANUTENCAO"]))],
     response_model=ManutencaoPreventivaDetalhadaResponse,
     tags=["Plano de Manutenção"],
 )
@@ -530,6 +578,7 @@ async def obter_manutencao_por_id(
 
 @app.put(
     "/manutencoes/{manutencao_id}",
+    dependencies=[Depends(auth.PermissaoRequerida(["ADMIN", "MANUTENCAO"]))],
     response_model=ManutencaoPreventivaDetalhadaResponse,
     tags=["Plano de Manutenção"],
 )
@@ -557,6 +606,7 @@ async def atualizar_dados_manutencao(
 
 @app.patch(
     "/manutencoes/{manutencao_id}/concluir",
+    dependencies=[Depends(auth.PermissaoRequerida(["ADMIN", "MANUTENCAO"]))],
     response_model=ManutencaoPreventivaDetalhadaResponse,
     tags=["Plano de Manutenção"],
 )
@@ -582,7 +632,11 @@ async def concluir_ordem_manutencao(
     return registro_atualizado
 
 
-@app.delete("/manutencoes/{manutencao_id}", tags=["Plano de Manutenção"])
+@app.delete(
+    "/manutencoes/{manutencao_id}",
+    dependencies=[Depends(auth.PermissaoRequerida(["ADMIN", "MANUTENCAO"]))],
+    tags=["Plano de Manutenção"],
+)
 async def deletar_manutencao_logica(
     manutencao_id: int, conn: asyncpg.Connection = Depends(get_db)
 ):
