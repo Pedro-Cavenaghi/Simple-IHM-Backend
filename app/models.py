@@ -1,3 +1,4 @@
+# Teste 1
 from enum import Enum
 from pydantic import BaseModel, Field, EmailStr, ConfigDict
 from datetime import datetime, date
@@ -81,6 +82,9 @@ class FuncionarioCreate(BaseModel):
     senha: str = Field(
         ..., min_length=6, description="Senha em texto puro para criptografia"
     )
+    perfil: Literal["ADMIN", "OPERADOR", "MANUTENCAO"] = Field(
+        "OPERADOR", description="Perfil de acesso"
+    )
 
 
 class FuncionarioResponse(ResponseBase):
@@ -90,6 +94,7 @@ class FuncionarioResponse(ResponseBase):
     turno_trabalho: int
     ativo: bool
     email: str
+    perfil: str
 
 
 class FuncionarioUpdate(BaseModel):
@@ -100,6 +105,9 @@ class FuncionarioUpdate(BaseModel):
     )
     email: EmailStr = Field(..., description="E-mail corporativo")
     ativo: bool = Field(True, description="Status do funcionário no sistema")
+    perfil: Literal["ADMIN", "OPERADOR", "MANUTENCAO"] = Field(
+        "OPERADOR", description="Perfil de acesso do funcionário"
+    )
 
 
 # ==========================================

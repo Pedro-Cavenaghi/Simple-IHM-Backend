@@ -1,3 +1,4 @@
+# Teste 1
 import asyncpg
 from datetime import datetime, date, time
 
@@ -16,6 +17,34 @@ def descobrir_turno_atual() -> int:
         return 2
     else:
         return 3
+
+
+# ==========================================
+# LOGS DE AUDITORIA
+# ==========================================
+
+
+async def registrar_auditoria(
+    conn: asyncpg.Connection,
+    usuario_id: int | None,
+    acao: str,
+    entidade: str,
+    entidade_id: int | None = None,
+    detalhes: str | None = None,
+) -> bool:
+    """
+    Grava um evento de auditoria no banco de dados.
+    """
+    sql = """
+        INSERT INTO audit_logs (usuario_id, acao, entidade, entidade_id, detalhes)
+        VALUES ($1, $2, $3, $4, $5);
+    """
+    try:
+        await conn.execute(sql, usuario_id, acao, entidade, entidade_id, detalhes)
+        return True
+    except Exception as e:
+        print(f"Erro ao registrar auditoria no Repository: {e}")
+        return False
 
 
 # ==========================================
@@ -197,8 +226,8 @@ async def buscar_historico_logs(
 async def cadastrar_funcionario(conn: asyncpg.Connection, dados: dict) -> int | None:
     try:
         sql = """
-            INSERT INTO funcionarios (nome, cargo, turno_trabalho, email, senha_hash, ativo)
-            VALUES ($1, $2, $3, LOWER($4), $5, $6)
+            INSERT INTO funcionarios (nome, cargo, turno_trabalho, email, senha_hash, ativo, perfil)
+            VALUES ($1, $2, $3, LOWER($4), $5, $6, $7)
             RETURNING id;
         """
         id_gerado = await conn.fetchval(
@@ -209,8 +238,12 @@ async def cadastrar_funcionario(conn: asyncpg.Connection, dados: dict) -> int | 
             dados["email"],
             dados["senha_hash"],
             dados.get("ativo", True),
+            dados.get("perfil", "OPERADOR"),
         )
         return id_gerado
+    except asyncpg.exceptions.UniqueViolationError:
+        # Relança para tratamento de HTTP 400 no FastAPI
+        raise
     except Exception as e:
         print(f"Erro ao cadastrar funcionário: {e}")
         return None
@@ -219,15 +252,13 @@ async def cadastrar_funcionario(conn: asyncpg.Connection, dados: dict) -> int | 
 async def listar_funcionarios_ativos(conn: asyncpg.Connection):
     try:
         sql = """
-            SELECT id, nome, cargo, turno_trabalho, ativo, email
+            SELECT id, nome, cargo, turno_trabalho, ativo, email, perfil
             FROM funcionarios
             WHERE deletado_em IS NULL
             ORDER BY nome ASC;
         """
         registros = await conn.fetch(sql)
-
         return [dict(r) for r in registros]
-
     except Exception as e:
         print(f"Erro ao listar funcionários: {e}")
         return []
@@ -254,7 +285,7 @@ async def obter_funcionario_por_id(
 ) -> dict | None:
     try:
         sql = """
-            SELECT id, nome, cargo, turno_trabalho, ativo, email
+            SELECT id, nome, cargo, turno_trabalho, ativo, email, perfil
             FROM funcionarios
             WHERE id = $1 AND deletado_em IS NULL;
         """
@@ -269,30 +300,28 @@ async def atualizar_funcionario(
     conn: asyncpg.Connection, funcionario_id: int, dados: dict
 ) -> bool:
     try:
-        campos = ["nome = $1", "cargo = $2", "turno_trabalho = $3", "email = $4"]
-        valores = [
+        # Atualização explícita incluindo 'perfil', 'LOWER(email)' e registro de alteração
+        sql = """
+            UPDATE funcionarios
+            SET nome = $1,
+                cargo = $2,
+                turno_trabalho = $3,
+                email = LOWER($4),
+                perfil = $5,
+                ativo = $6,
+                ultima_atualizacao = NOW()
+            WHERE id = $7 AND deletado_em IS NULL;
+        """
+        status = await conn.execute(
+            sql,
             dados["nome"],
             dados["cargo"],
             dados["turno_trabalho"],
             dados["email"],
-        ]
-
-        if dados.get("senha_hash") is not None:
-            campos.append("senha_hash = $5")
-            valores.append(dados["senha_hash"])
-            sql_id_param = "$6"
-        else:
-            sql_id_param = "$5"
-
-        valores.append(funcionario_id)
-
-        sql = f"""
-            UPDATE funcionarios
-            SET {", ".join(campos)}
-            WHERE id = {sql_id_param} AND deletado_em IS NULL;
-        """
-
-        status = await conn.execute(sql, *valores)
+            dados.get("perfil", "OPERADOR"),
+            dados.get("ativo", True),
+            funcionario_id,
+        )
         return status == "UPDATE 1"
     except asyncpg.exceptions.UniqueViolationError:
         raise
@@ -304,8 +333,9 @@ async def atualizar_funcionario(
 async def obter_funcionario_por_email(
     conn: asyncpg.Connection, email: str
 ) -> dict | None:
+    # 'perfil' adicionado ao SELECT para montagem do Payload do JWT
     sql = """
-        SELECT id, nome, email, senha_hash 
+        SELECT id, nome, email, senha_hash, perfil, ativo 
         FROM funcionarios 
         WHERE LOWER(email) = LOWER($1) AND deletado_em IS NULL;
     """
@@ -418,21 +448,28 @@ async def soft_delete_maquina(conn: asyncpg.Connection, maquina_id: int) -> bool
 # ==========================================
 
 
-async def agendar_manutencao(conn: asyncpg.Connection, dados: dict) -> int | None:
+async def agendar_manutencao(conn: asyncpg.Connection, dados: dict) -> dict | None:
     try:
+        maquina_ativa = await conn.fetchval(
+            "SELECT id FROM maquinas WHERE id = $1 AND deletado_em IS NULL;",
+            dados["maquina_id"],
+        )
+        if not maquina_ativa:
+            return None
+
         sql = """
             INSERT INTO manutencao_preventiva (maquina_id, descricao_servico, data_agendada, tipo_manutencao)
             VALUES ($1, $2, $3, $4)
-            RETURNING id;
+            RETURNING id, maquina_id, descricao_servico, data_agendada, tipo_manutencao, concluida, data_conclusao_real, funcionario_id;
         """
-        id_gerado = await conn.fetchval(
+        registro = await conn.fetchrow(
             sql,
             dados["maquina_id"],
             dados["descricao_servico"].strip(),
             dados["data_agendada"],
             dados["tipo_manutencao"],
         )
-        return id_gerado
+        return dict(registro) if registro else None
     except Exception as e:
         print(f"Erro ao agendar manutenção no Repository: {e}")
         return None
@@ -456,7 +493,7 @@ async def listar_manutencoes_detalhadas(conn: asyncpg.Connection):
             FROM manutencao_preventiva mp
             LEFT JOIN maquinas m ON mp.maquina_id = m.id
             LEFT JOIN funcionarios f ON mp.funcionario_id = f.id
-            WHERE mp.deletado_em IS NULL
+            WHERE mp.deletado_em IS NULL AND (m.deletado_em IS NULL OR m.id IS NULL)
             ORDER BY mp.concluida ASC, mp.data_agendada ASC;
         """
         registros = await conn.fetch(sql)
@@ -521,7 +558,7 @@ async def concluir_ordem_manutencao(
             SET concluida = TRUE,
                 data_conclusao_real = NOW(),
                 funcionario_id = $1
-            WHERE id = $2 AND concluida = FALSE;
+            WHERE id = $2 AND concluida = FALSE AND deletado_em IS NULL;
         """
         status = await conn.execute(sql, funcionario_id, manutencao_id)
         return status == "UPDATE 1"
