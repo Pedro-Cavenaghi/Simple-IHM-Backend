@@ -19,6 +19,7 @@ concurrency:
   group: backend-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+
 jobs:
   quality:
     name: Code Quality
@@ -86,7 +87,7 @@ jobs:
 
       - name: Import FastAPI application
         run: python -c "from app.main import app; print(app.title)"
-        
+
 
   automated-tests:
     name: Automated Tests
@@ -113,7 +114,73 @@ jobs:
 
       - name: Run automated tests
         run: |
-          python -m pytest tests -v \
+          python -m pytest tests/unit tests/api -v \
             --cov=app \
             --cov-report=term-missing \
             --cov-report=xml
+
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+
+        env:
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: simple_ihm_test
+
+        ports:
+          - 5432:5432
+
+        options: >-
+          --health-cmd "pg_isready -U test_user -d simple_ihm_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      TEST_DB_HOST: localhost
+      TEST_DB_PORT: 5432
+      TEST_DB_USER: test_user
+      TEST_DB_PASSWORD: test_password
+      TEST_DB_NAME: simple_ihm_test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install -r requirements-dev.txt
+
+      - name: Apply database schema
+        env:
+          PGPASSWORD: test_password
+        run: |
+          psql \
+            -h localhost \
+            -p 5432 \
+            -U test_user \
+            -d simple_ihm_test \
+            -f database/schema.sql
+
+      - name: Run integration tests
+        run: |
+          python -m pytest tests/integration -v \
+            --cov=app.repository \
+            --cov-report=term-missing
