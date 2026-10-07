@@ -33,7 +33,9 @@ async def verificar_api_key(api_key: Optional[str] = Security(api_key_header)):
 
 def criar_token_acesso(dados: dict) -> str:
     dados_para_codificar = dados.copy()
-    expiracao = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    expiracao = datetime.now(timezone.utc) + timedelta(
+        minutes=ACCESS_TOKEN_EXPIRE_MINUTES
+    )
     dados_para_codificar.update({"exp": expiracao})
     return jwt.encode(dados_para_codificar, SECRET_KEY, algorithm=ALGORITHM)
 

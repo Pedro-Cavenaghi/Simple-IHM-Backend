@@ -366,9 +366,7 @@ async def atualizar_cadastro_maquina(
 )
 async def listar_funcionarios(
     conn: asyncpg.Connection = Depends(get_db),
-    usuario_atual: FuncionarioResponse = Depends(
-        auth.PermissaoRequerida(["ADMIN"])
-    ),
+    usuario_atual: FuncionarioResponse = Depends(auth.PermissaoRequerida(["ADMIN"])),
 ):
     """
     Retorna a lista de funcionários ativos (que não sofreram soft delete) para a tabela do Dashboard.
@@ -386,9 +384,7 @@ async def listar_funcionarios(
 async def cadastrar_funcionario(
     funcionario: FuncionarioCreate,
     conn: asyncpg.Connection = Depends(get_db),
-    usuario_atual: FuncionarioResponse = Depends(
-        auth.PermissaoRequerida(["ADMIN"])
-    ),
+    usuario_atual: FuncionarioResponse = Depends(auth.PermissaoRequerida(["ADMIN"])),
 ):
     """
     Cadastra um novo funcionário com e-mail normalizado (minúsculas/sem espaços)
@@ -446,9 +442,7 @@ async def cadastrar_funcionario(
 async def get_funcionario_por_id(
     funcionario_id: int,
     conn: asyncpg.Connection = Depends(get_db),
-    usuario_atual: FuncionarioResponse = Depends(
-        auth.PermissaoRequerida(["ADMIN"])
-    ),
+    usuario_atual: FuncionarioResponse = Depends(auth.PermissaoRequerida(["ADMIN"])),
 ):
     """
     Retorna os detalhes de um funcionário específico pelo ID.
@@ -470,9 +464,7 @@ async def put_funcionario(
     funcionario_id: int,
     funcionario_dados: FuncionarioUpdate,
     conn: asyncpg.Connection = Depends(get_db),
-    usuario_atual: FuncionarioResponse = Depends(
-        auth.PermissaoRequerida(["ADMIN"])
-    ),
+    usuario_atual: FuncionarioResponse = Depends(auth.PermissaoRequerida(["ADMIN"])),
 ):
     """
     Atualiza os dados cadastrais administrativos de um funcionário.
@@ -522,9 +514,7 @@ async def put_funcionario(
 async def deletar_funcionario(
     funcionario_id: int,
     conn: asyncpg.Connection = Depends(get_db),
-    usuario_atual: FuncionarioResponse = Depends(
-        auth.PermissaoRequerida(["ADMIN"])
-    ),
+    usuario_atual: FuncionarioResponse = Depends(auth.PermissaoRequerida(["ADMIN"])),
 ):
     """
     Aplica Soft Delete em um funcionário do sistema. O registro permanece no banco para auditoria.
@@ -575,7 +565,7 @@ async def agendar_nova_manutencao(
     A ordem nasce com o status 'concluida = false'.
     """
     nova_manutencao = await repository.agendar_manutencao(conn, manutencao.model_dump())
-    
+
     if not nova_manutencao:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
