@@ -221,20 +221,18 @@ async def test_nao_permite_email_duplicado(db_conn):
         },
     )
 
-    segundo_id = await repository.cadastrar_funcionario(
-        db_conn,
-        {
-            "nome": "Outro João",
-            "cargo": "Técnico",
-            "turno_trabalho": 2,
-            "email": "JOAO@EMAIL.COM",
-            "senha_hash": "hash",
-            "ativo": True,
-        },
-    )
-
-    # O repository captura a exceção e retorna None.
-    assert segundo_id is None
+    with pytest.raises(asyncpg.UniqueViolationError):
+        await repository.cadastrar_funcionario(
+            db_conn,
+            {
+                "nome": "Outro João",
+                "cargo": "Técnico",
+                "turno_trabalho": 2,
+                "email": "JOAO@EMAIL.COM",
+                "senha_hash": "hash",
+                "ativo": True,
+            },
+        )
 
 
 @pytest.mark.asyncio

@@ -21,6 +21,11 @@ CREATE TABLE IF NOT EXISTS funcionarios (
     email VARCHAR(255) NOT NULL,
     senha_hash TEXT NOT NULL,
     ativo BOOLEAN NOT NULL DEFAULT TRUE,
+
+    perfil VARCHAR(20) NOT NULL DEFAULT 'OPERADOR'
+        CHECK (perfil IN ('ADMIN', 'OPERADOR', 'MANUTENCAO')),
+
+    ultima_atualizacao TIMESTAMP,
     deletado_em TIMESTAMP
 );
 
@@ -28,6 +33,19 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_funcionarios_email_ativo
 ON funcionarios (LOWER(email))
 WHERE deletado_em IS NULL;
 
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id BIGSERIAL PRIMARY KEY,
+
+    usuario_id INTEGER
+        REFERENCES funcionarios(id) ON DELETE SET NULL,
+
+    acao VARCHAR(100) NOT NULL,
+    entidade VARCHAR(100) NOT NULL,
+    entidade_id INTEGER,
+    detalhes TEXT,
+
+    criado_em TIMESTAMP NOT NULL DEFAULT NOW()
+);
 
 CREATE TABLE IF NOT EXISTS status_atual_maquinas (
     maquina_id INTEGER PRIMARY KEY
