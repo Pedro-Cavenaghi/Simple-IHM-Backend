@@ -14,14 +14,23 @@ async def test_login_com_sucesso(client, monkeypatch):
         "nome": "João Silva",
         "email": "joao@email.com",
         "senha_hash": senha_hash,
+        "perfil": "ADMIN",
+        "ativo": True,
     }
 
     mock_repository = AsyncMock(return_value=funcionario)
+    mock_auditoria = AsyncMock(return_value=True)
 
     monkeypatch.setattr(
         main_module.repository,
         "obter_funcionario_por_email",
         mock_repository,
+    )
+
+    monkeypatch.setattr(
+        main_module.repository,
+        "registrar_auditoria",
+        mock_auditoria,
     )
 
     response = await client.post(
@@ -35,14 +44,20 @@ async def test_login_com_sucesso(client, monkeypatch):
     dados = response.json()
 
     assert response.status_code == 200
-    assert dados["status"] == "Sucesso"
-    assert dados["usuario_id"] == 1
-    assert dados["nome"] == "João Silva"
+    assert dados["token_type"] == "bearer"
+    assert "access_token" in dados
+
+    assert dados["usuario"]["id"] == 1
+    assert dados["usuario"]["nome"] == "João Silva"
+    assert dados["usuario"]["email"] == "joao@email.com"
+    assert dados["usuario"]["perfil"] == "ADMIN"
 
     mock_repository.assert_awaited_once_with(
         ANY,
         "joao@email.com",
     )
+
+    mock_auditoria.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -54,14 +69,23 @@ async def test_login_normaliza_email(client, monkeypatch):
         "nome": "João Silva",
         "email": "joao@email.com",
         "senha_hash": senha_hash,
+        "perfil": "ADMIN",
+        "ativo": True,
     }
 
     mock_repository = AsyncMock(return_value=funcionario)
+    mock_auditoria = AsyncMock(return_value=True)
 
     monkeypatch.setattr(
         main_module.repository,
         "obter_funcionario_por_email",
         mock_repository,
+    )
+
+    monkeypatch.setattr(
+        main_module.repository,
+        "registrar_auditoria",
+        mock_auditoria,
     )
 
     response = await client.post(
@@ -113,14 +137,23 @@ async def test_login_senha_incorreta(client, monkeypatch):
         "nome": "João Silva",
         "email": "joao@email.com",
         "senha_hash": senha_hash,
+        "perfil": "OPERADOR",
+        "ativo": True,
     }
 
     mock_repository = AsyncMock(return_value=funcionario)
+    mock_auditoria = AsyncMock(return_value=True)
 
     monkeypatch.setattr(
         main_module.repository,
         "obter_funcionario_por_email",
         mock_repository,
+    )
+
+    monkeypatch.setattr(
+        main_module.repository,
+        "registrar_auditoria",
+        mock_auditoria,
     )
 
     response = await client.post(
@@ -135,3 +168,4 @@ async def test_login_senha_incorreta(client, monkeypatch):
     assert response.json()["detail"] == "Credenciais inválidas"
 
     mock_repository.assert_awaited_once()
+    mock_auditoria.assert_awaited_once()

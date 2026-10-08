@@ -6,7 +6,7 @@ import app.main as main_module
 
 
 @pytest.mark.asyncio
-async def test_listar_funcionarios(client, monkeypatch):
+async def test_listar_funcionarios(client_admin, monkeypatch):
     funcionarios = [
         {
             "id": 1,
@@ -15,6 +15,7 @@ async def test_listar_funcionarios(client, monkeypatch):
             "turno_trabalho": 1,
             "ativo": True,
             "email": "joao@empresa.com",
+            "perfil": "OPERADOR",
         }
     ]
 
@@ -24,16 +25,17 @@ async def test_listar_funcionarios(client, monkeypatch):
         AsyncMock(return_value=funcionarios),
     )
 
-    response = await client.get("/funcionarios")
+    response = await client_admin.get("/funcionarios")
 
     assert response.status_code == 200
     assert len(response.json()) == 1
     assert response.json()[0]["nome"] == "João Silva"
     assert response.json()[0]["ativo"] is True
+    assert response.json()[0]["perfil"] == "OPERADOR"
 
 
 @pytest.mark.asyncio
-async def test_obter_funcionario_por_id(client, monkeypatch):
+async def test_obter_funcionario_por_id(client_admin, monkeypatch):
     funcionario = {
         "id": 1,
         "nome": "João Silva",
@@ -41,6 +43,7 @@ async def test_obter_funcionario_por_id(client, monkeypatch):
         "turno_trabalho": 1,
         "ativo": True,
         "email": "joao@empresa.com",
+        "perfil": "OPERADOR",
     }
 
     monkeypatch.setattr(
@@ -49,22 +52,23 @@ async def test_obter_funcionario_por_id(client, monkeypatch):
         AsyncMock(return_value=funcionario),
     )
 
-    response = await client.get("/funcionarios/1")
+    response = await client_admin.get("/funcionarios/1")
 
     assert response.status_code == 200
     assert response.json()["id"] == 1
     assert response.json()["email"] == "joao@empresa.com"
+    assert response.json()["perfil"] == "OPERADOR"
 
 
 @pytest.mark.asyncio
-async def test_obter_funcionario_inexistente(client, monkeypatch):
+async def test_obter_funcionario_inexistente(client_admin, monkeypatch):
     monkeypatch.setattr(
         main_module.repository,
         "obter_funcionario_por_id",
         AsyncMock(return_value=None),
     )
 
-    response = await client.get("/funcionarios/999")
+    response = await client_admin.get("/funcionarios/999")
 
     assert response.status_code == 404
     assert response.json()["detail"] == (
@@ -73,14 +77,20 @@ async def test_obter_funcionario_inexistente(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_cadastrar_funcionario(client, monkeypatch):
+async def test_cadastrar_funcionario(client_admin, monkeypatch):
     monkeypatch.setattr(
         main_module.repository,
         "cadastrar_funcionario",
         AsyncMock(return_value=10),
     )
 
-    response = await client.post(
+    monkeypatch.setattr(
+        main_module.repository,
+        "registrar_auditoria",
+        AsyncMock(return_value=True),
+    )
+
+    response = await client_admin.post(
         "/funcionarios",
         json={
             "nome": "Maria Souza",
@@ -88,6 +98,7 @@ async def test_cadastrar_funcionario(client, monkeypatch):
             "turno_trabalho": 2,
             "email": "MARIA@EMPRESA.COM",
             "senha": "123456",
+            "perfil": "OPERADOR",
         },
     )
 
@@ -99,11 +110,12 @@ async def test_cadastrar_funcionario(client, monkeypatch):
     assert dados["nome"] == "Maria Souza"
     assert dados["email"] == "maria@empresa.com"
     assert dados["ativo"] is True
+    assert dados["perfil"] == "OPERADOR"
 
 
 @pytest.mark.asyncio
-async def test_cadastrar_funcionario_email_invalido(client):
-    response = await client.post(
+async def test_cadastrar_funcionario_email_invalido(client_admin):
+    response = await client_admin.post(
         "/funcionarios",
         json={
             "nome": "Maria Souza",
@@ -111,6 +123,7 @@ async def test_cadastrar_funcionario_email_invalido(client):
             "turno_trabalho": 2,
             "email": "email-invalido",
             "senha": "123456",
+            "perfil": "OPERADOR",
         },
     )
 
@@ -118,8 +131,8 @@ async def test_cadastrar_funcionario_email_invalido(client):
 
 
 @pytest.mark.asyncio
-async def test_cadastrar_funcionario_senha_curta(client):
-    response = await client.post(
+async def test_cadastrar_funcionario_senha_curta(client_admin):
+    response = await client_admin.post(
         "/funcionarios",
         json={
             "nome": "Maria Souza",
@@ -127,6 +140,7 @@ async def test_cadastrar_funcionario_senha_curta(client):
             "turno_trabalho": 2,
             "email": "maria@empresa.com",
             "senha": "123",
+            "perfil": "OPERADOR",
         },
     )
 
@@ -134,14 +148,20 @@ async def test_cadastrar_funcionario_senha_curta(client):
 
 
 @pytest.mark.asyncio
-async def test_atualizar_funcionario(client, monkeypatch):
+async def test_atualizar_funcionario(client_admin, monkeypatch):
     monkeypatch.setattr(
         main_module.repository,
         "atualizar_funcionario",
         AsyncMock(return_value=True),
     )
 
-    response = await client.put(
+    monkeypatch.setattr(
+        main_module.repository,
+        "registrar_auditoria",
+        AsyncMock(return_value=True),
+    )
+
+    response = await client_admin.put(
         "/funcionarios/1",
         json={
             "nome": "João Atualizado",
@@ -149,23 +169,25 @@ async def test_atualizar_funcionario(client, monkeypatch):
             "turno_trabalho": 3,
             "email": "joao.atualizado@empresa.com",
             "ativo": True,
+            "perfil": "ADMIN",
         },
     )
 
     assert response.status_code == 200
     assert response.json()["nome"] == "João Atualizado"
     assert response.json()["cargo"] == "Supervisor"
+    assert response.json()["perfil"] == "ADMIN"
 
 
 @pytest.mark.asyncio
-async def test_atualizar_funcionario_inexistente(client, monkeypatch):
+async def test_atualizar_funcionario_inexistente(client_admin, monkeypatch):
     monkeypatch.setattr(
         main_module.repository,
         "atualizar_funcionario",
         AsyncMock(return_value=False),
     )
 
-    response = await client.put(
+    response = await client_admin.put(
         "/funcionarios/999",
         json={
             "nome": "João Atualizado",
@@ -173,6 +195,7 @@ async def test_atualizar_funcionario_inexistente(client, monkeypatch):
             "turno_trabalho": 3,
             "email": "joao.atualizado@empresa.com",
             "ativo": True,
+            "perfil": "OPERADOR",
         },
     )
 
@@ -180,27 +203,33 @@ async def test_atualizar_funcionario_inexistente(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_deletar_funcionario(client, monkeypatch):
+async def test_deletar_funcionario(client_admin, monkeypatch):
     monkeypatch.setattr(
         main_module.repository,
         "soft_delete_funcionario",
         AsyncMock(return_value=True),
     )
 
-    response = await client.delete("/funcionarios/1")
+    monkeypatch.setattr(
+        main_module.repository,
+        "registrar_auditoria",
+        AsyncMock(return_value=True),
+    )
+
+    response = await client_admin.delete("/funcionarios/1")
 
     assert response.status_code == 200
     assert response.json()["status"] == "Sucesso"
 
 
 @pytest.mark.asyncio
-async def test_deletar_funcionario_inexistente(client, monkeypatch):
+async def test_deletar_funcionario_inexistente(client_admin, monkeypatch):
     monkeypatch.setattr(
         main_module.repository,
         "soft_delete_funcionario",
         AsyncMock(return_value=False),
     )
 
-    response = await client.delete("/funcionarios/999")
+    response = await client_admin.delete("/funcionarios/999")
 
     assert response.status_code == 404

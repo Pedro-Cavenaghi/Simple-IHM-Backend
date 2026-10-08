@@ -1,5 +1,5 @@
 from datetime import date, datetime
-from unittest.mock import AsyncMock
+from unittest.mock import ANY, AsyncMock
 
 import pytest
 
@@ -7,13 +7,30 @@ import app.main as main_module
 
 
 @pytest.mark.asyncio
-async def test_agendar_manutencao(client, monkeypatch):
-    mock_repository = AsyncMock(return_value=1)
+async def test_agendar_manutencao(client_admin, monkeypatch):
+    nova_manutencao = {
+        "id": 1,
+        "maquina_id": 1,
+        "descricao_servico": "Troca preventiva de rolamento",
+        "data_agendada": date(2026, 10, 15),
+        "concluida": False,
+        "data_conclusao_real": None,
+        "funcionario_id": None,
+        "tipo_manutencao": "Preventiva",
+    }
+
+    mock_repository = AsyncMock(return_value=nova_manutencao)
 
     monkeypatch.setattr(
         main_module.repository,
         "agendar_manutencao",
         mock_repository,
+    )
+
+    monkeypatch.setattr(
+        main_module.repository,
+        "registrar_auditoria",
+        AsyncMock(return_value=True),
     )
 
     payload = {
@@ -23,7 +40,7 @@ async def test_agendar_manutencao(client, monkeypatch):
         "tipo_manutencao": "Preventiva",
     }
 
-    response = await client.post(
+    response = await client_admin.post(
         "/manutencoes",
         json=payload,
     )
@@ -42,7 +59,7 @@ async def test_agendar_manutencao(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_agendar_manutencao_com_erro(client, monkeypatch):
+async def test_agendar_manutencao_com_erro(client_admin, monkeypatch):
     mock_repository = AsyncMock(return_value=None)
 
     monkeypatch.setattr(
@@ -58,7 +75,7 @@ async def test_agendar_manutencao_com_erro(client, monkeypatch):
         "tipo_manutencao": "Preventiva",
     }
 
-    response = await client.post(
+    response = await client_admin.post(
         "/manutencoes",
         json=payload,
     )
@@ -66,15 +83,15 @@ async def test_agendar_manutencao_com_erro(client, monkeypatch):
     assert response.status_code == 400
     assert response.json()["detail"] == (
         "Erro ao agendar manutenção. "
-        "Verifique se o maquina_id informado existe."
+        "Verifique se a máquina informada existe e está ativa."
     )
 
     mock_repository.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_agendar_manutencao_tipo_invalido(client, monkeypatch):
-    mock_repository = AsyncMock(return_value=1)
+async def test_agendar_manutencao_tipo_invalido(client_admin, monkeypatch):
+    mock_repository = AsyncMock(return_value=None)
 
     monkeypatch.setattr(
         main_module.repository,
@@ -89,19 +106,18 @@ async def test_agendar_manutencao_tipo_invalido(client, monkeypatch):
         "tipo_manutencao": "Corretiva",
     }
 
-    response = await client.post(
+    response = await client_admin.post(
         "/manutencoes",
         json=payload,
     )
 
     assert response.status_code == 422
-
     mock_repository.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_agendar_manutencao_descricao_curta(client, monkeypatch):
-    mock_repository = AsyncMock(return_value=1)
+async def test_agendar_manutencao_descricao_curta(client_admin, monkeypatch):
+    mock_repository = AsyncMock(return_value=None)
 
     monkeypatch.setattr(
         main_module.repository,
@@ -116,18 +132,17 @@ async def test_agendar_manutencao_descricao_curta(client, monkeypatch):
         "tipo_manutencao": "Preventiva",
     }
 
-    response = await client.post(
+    response = await client_admin.post(
         "/manutencoes",
         json=payload,
     )
 
     assert response.status_code == 422
-
     mock_repository.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_listar_manutencoes(client, monkeypatch):
+async def test_listar_manutencoes(client_admin, monkeypatch):
     manutencoes = [
         {
             "id": 1,
@@ -152,7 +167,7 @@ async def test_listar_manutencoes(client, monkeypatch):
         mock_repository,
     )
 
-    response = await client.get("/manutencoes")
+    response = await client_admin.get("/manutencoes")
 
     dados = response.json()
 
@@ -167,7 +182,7 @@ async def test_listar_manutencoes(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_obter_manutencao_por_id(client, monkeypatch):
+async def test_obter_manutencao_por_id(client_admin, monkeypatch):
     manutencao = {
         "id": 1,
         "maquina_id": 1,
@@ -190,7 +205,7 @@ async def test_obter_manutencao_por_id(client, monkeypatch):
         mock_repository,
     )
 
-    response = await client.get("/manutencoes/1")
+    response = await client_admin.get("/manutencoes/1")
 
     dados = response.json()
 
@@ -203,7 +218,7 @@ async def test_obter_manutencao_por_id(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_obter_manutencao_inexistente(client, monkeypatch):
+async def test_obter_manutencao_inexistente(client_admin, monkeypatch):
     mock_repository = AsyncMock(return_value=None)
 
     monkeypatch.setattr(
@@ -212,18 +227,16 @@ async def test_obter_manutencao_inexistente(client, monkeypatch):
         mock_repository,
     )
 
-    response = await client.get("/manutencoes/999")
+    response = await client_admin.get("/manutencoes/999")
 
     assert response.status_code == 404
-    assert response.json()["detail"] == (
-        "Ordem de manutenção não encontrada."
-    )
+    assert response.json()["detail"] == "Ordem de manutenção não encontrada."
 
     mock_repository.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_atualizar_manutencao(client, monkeypatch):
+async def test_atualizar_manutencao(client_admin, monkeypatch):
     manutencao_atualizada = {
         "id": 1,
         "maquina_id": 1,
@@ -253,13 +266,19 @@ async def test_atualizar_manutencao(client, monkeypatch):
         mock_obter,
     )
 
+    monkeypatch.setattr(
+        main_module.repository,
+        "registrar_auditoria",
+        AsyncMock(return_value=True),
+    )
+
     payload = {
         "descricao_servico": "Nova manutenção preventiva",
         "data_agendada": "2026-10-20",
         "tipo_manutencao": "Preditiva",
     }
 
-    response = await client.put(
+    response = await client_admin.put(
         "/manutencoes/1",
         json=payload,
     )
@@ -276,7 +295,7 @@ async def test_atualizar_manutencao(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_atualizar_manutencao_com_erro(client, monkeypatch):
+async def test_atualizar_manutencao_com_erro(client_admin, monkeypatch):
     mock_repository = AsyncMock(return_value=False)
 
     monkeypatch.setattr(
@@ -291,7 +310,7 @@ async def test_atualizar_manutencao_com_erro(client, monkeypatch):
         "tipo_manutencao": "Preventiva",
     }
 
-    response = await client.put(
+    response = await client_admin.put(
         "/manutencoes/999",
         json=payload,
     )
@@ -306,7 +325,7 @@ async def test_atualizar_manutencao_com_erro(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_concluir_manutencao(client, monkeypatch):
+async def test_concluir_manutencao(client_admin, monkeypatch):
     manutencao_concluida = {
         "id": 1,
         "maquina_id": 1,
@@ -317,7 +336,7 @@ async def test_concluir_manutencao(client, monkeypatch):
         "concluida": True,
         "data_conclusao_real": datetime(2026, 10, 15, 15, 30),
         "funcionario_id": 2,
-        "nome_funcionario": "Carlos Técnico",
+        "nome_funcionario": "Administrador Teste",
         "tipo_manutencao": "Preventiva",
     }
 
@@ -336,11 +355,14 @@ async def test_concluir_manutencao(client, monkeypatch):
         mock_obter,
     )
 
-    response = await client.patch(
+    monkeypatch.setattr(
+        main_module.repository,
+        "registrar_auditoria",
+        AsyncMock(return_value=True),
+    )
+
+    response = await client_admin.patch(
         "/manutencoes/1/concluir",
-        json={
-            "funcionario_id": 2,
-        },
     )
 
     dados = response.json()
@@ -349,14 +371,17 @@ async def test_concluir_manutencao(client, monkeypatch):
     assert dados["id"] == 1
     assert dados["concluida"] is True
     assert dados["funcionario_id"] == 2
-    assert dados["nome_funcionario"] == "Carlos Técnico"
 
-    mock_concluir.assert_awaited_once()
+    mock_concluir.assert_awaited_once_with(
+        ANY,
+        1,
+        2,
+    )
     mock_obter.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_concluir_manutencao_com_erro(client, monkeypatch):
+async def test_concluir_manutencao_com_erro(client_admin, monkeypatch):
     mock_repository = AsyncMock(return_value=False)
 
     monkeypatch.setattr(
@@ -365,24 +390,25 @@ async def test_concluir_manutencao_com_erro(client, monkeypatch):
         mock_repository,
     )
 
-    response = await client.patch(
+    response = await client_admin.patch(
         "/manutencoes/999/concluir",
-        json={
-            "funcionario_id": 2,
-        },
     )
 
     assert response.status_code == 400
     assert response.json()["detail"] == (
         "Falha ao encerrar ordem. "
-        "Verifique se o técnico existe ou se a ordem já foi fechada."
+        "Verifique se a ordem existe ou se já foi fechada."
     )
 
-    mock_repository.assert_awaited_once()
+    mock_repository.assert_awaited_once_with(
+        ANY,
+        999,
+        2,
+    )
 
 
 @pytest.mark.asyncio
-async def test_deletar_manutencao(client, monkeypatch):
+async def test_deletar_manutencao(client_admin, monkeypatch):
     mock_repository = AsyncMock(return_value=True)
 
     monkeypatch.setattr(
@@ -391,7 +417,13 @@ async def test_deletar_manutencao(client, monkeypatch):
         mock_repository,
     )
 
-    response = await client.delete("/manutencoes/1")
+    monkeypatch.setattr(
+        main_module.repository,
+        "registrar_auditoria",
+        AsyncMock(return_value=True),
+    )
+
+    response = await client_admin.delete("/manutencoes/1")
 
     dados = response.json()
 
@@ -403,7 +435,7 @@ async def test_deletar_manutencao(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_deletar_manutencao_com_erro(client, monkeypatch):
+async def test_deletar_manutencao_com_erro(client_admin, monkeypatch):
     mock_repository = AsyncMock(return_value=False)
 
     monkeypatch.setattr(
@@ -412,7 +444,7 @@ async def test_deletar_manutencao_com_erro(client, monkeypatch):
         mock_repository,
     )
 
-    response = await client.delete("/manutencoes/999")
+    response = await client_admin.delete("/manutencoes/999")
 
     assert response.status_code == 400
     assert response.json()["detail"] == (
