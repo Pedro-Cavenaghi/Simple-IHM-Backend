@@ -33,7 +33,7 @@ pytest-asyncio==1.4.0
 pytest-cov==7.1.0
 python-dotenv==1.2.2
 python-jose==3.5.0
-requests==2.33.1
+requests==2.34.2
 rsa==4.9.1
 ruff==0.13.2
 six==1.17.0
