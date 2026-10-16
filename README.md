@@ -1,6 +1,6 @@
 # Simple IHM - API de Telemetria Industrial (Backend)
 
-🚀 **Link da API em Produção:** [Acesse aqui no Railway]( https://simple-ihm-production.up.railway.app )
+🚀 **Link da API em Produção:** [Acesse aqui no Railway]( https://simple-ihm-api-production.up.railway.app/docs )
 
 O **Simple IHM** é um ecossistema IoT projetado para monitoramento de telemetria de máquinas industriais em tempo real. O objetivo principal do projeto é aplicar os conceitos de **Manutenção Preditiva e Corretiva** em um ambiente de chão de fábrica, traduzindo dados complexos de sensores em uma interface visual simples, direta e de baixa carga cognitiva para os operadores.
 
