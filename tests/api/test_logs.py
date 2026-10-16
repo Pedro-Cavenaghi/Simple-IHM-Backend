@@ -7,7 +7,7 @@ import app.main as main_module
 
 
 @pytest.mark.asyncio
-async def test_listar_logs(client, monkeypatch):
+async def test_listar_logs(client_operador, monkeypatch):
     logs = [
         {
             "id": 1,
@@ -31,7 +31,7 @@ async def test_listar_logs(client, monkeypatch):
         mock_repository,
     )
 
-    response = await client.get("/logs")
+    response = await client_operador.get("/logs")
 
     dados = response.json()
 
@@ -52,7 +52,7 @@ async def test_listar_logs(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_listar_logs_filtrados_por_maquina(client, monkeypatch):
+async def test_listar_logs_filtrados_por_maquina(client_operador, monkeypatch):
     mock_repository = AsyncMock(return_value=[])
 
     monkeypatch.setattr(
@@ -61,7 +61,7 @@ async def test_listar_logs_filtrados_por_maquina(client, monkeypatch):
         mock_repository,
     )
 
-    response = await client.get(
+    response = await client_operador.get(
         "/logs",
         params={
             "maquina_id": 3,
@@ -84,7 +84,7 @@ async def test_listar_logs_filtrados_por_maquina(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_listar_logs_periodo_customizado(client, monkeypatch):
+async def test_listar_logs_periodo_customizado(client_operador, monkeypatch):
     mock_repository = AsyncMock(return_value=[])
 
     monkeypatch.setattr(
@@ -93,7 +93,7 @@ async def test_listar_logs_periodo_customizado(client, monkeypatch):
         mock_repository,
     )
 
-    response = await client.get(
+    response = await client_operador.get(
         "/logs",
         params={
             "periodo": "customizado",
@@ -115,7 +115,7 @@ async def test_listar_logs_periodo_customizado(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_periodo_customizado_sem_datas(client, monkeypatch):
+async def test_periodo_customizado_sem_datas(client_operador, monkeypatch):
     mock_repository = AsyncMock(return_value=[])
 
     monkeypatch.setattr(
@@ -124,7 +124,7 @@ async def test_periodo_customizado_sem_datas(client, monkeypatch):
         mock_repository,
     )
 
-    response = await client.get(
+    response = await client_operador.get(
         "/logs",
         params={
             "periodo": "customizado",
@@ -141,7 +141,7 @@ async def test_periodo_customizado_sem_datas(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_logs_limite_acima_do_maximo(client, monkeypatch):
+async def test_logs_limite_acima_do_maximo(client_operador, monkeypatch):
     mock_repository = AsyncMock(return_value=[])
 
     monkeypatch.setattr(
@@ -150,7 +150,7 @@ async def test_logs_limite_acima_do_maximo(client, monkeypatch):
         mock_repository,
     )
 
-    response = await client.get(
+    response = await client_operador.get(
         "/logs",
         params={
             "limite": 1001,
@@ -163,7 +163,7 @@ async def test_logs_limite_acima_do_maximo(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_logs_limite_igual_a_zero(client, monkeypatch):
+async def test_logs_limite_igual_a_zero(client_operador, monkeypatch):
     mock_repository = AsyncMock(return_value=[])
 
     monkeypatch.setattr(
@@ -172,7 +172,7 @@ async def test_logs_limite_igual_a_zero(client, monkeypatch):
         mock_repository,
     )
 
-    response = await client.get(
+    response = await client_operador.get(
         "/logs",
         params={
             "limite": 0,
