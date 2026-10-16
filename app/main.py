@@ -20,6 +20,7 @@ from app.websocket_manager import manager
 
 # Importações internas dos modelos
 from .models import (
+    AuditLogResponse,
     FuncionarioCreate,
     FuncionarioResponse,
     FuncionarioUpdate,
@@ -188,8 +189,35 @@ async def listar_status_por_id(
 
 
 # ==========================================
-# HISTÓRICO DE LOGS E AUTENTICAÇÃO DE USUÁRIOS
+# HISTÓRICO DE LOGS E AUDITORIA
 # ==========================================
+
+
+@app.get(
+    "/auditoria",
+    response_model=list[AuditLogResponse],
+    tags=["Auditoria e Segurança"],
+)
+async def listar_auditoria(
+    usuario_id: int | None = Query(
+        None, description="Filtrar por ID de usuário específico"
+    ),
+    limite: int = Query(
+        100, ge=1, le=500, description="Quantidade máxima de registros"
+    ),
+    conn: asyncpg.Connection = Depends(get_db),
+    _: FuncionarioResponse = Depends(
+        auth.PermissaoRequerida(["ADMIN"])
+    ),  # <- 'usuario_atual' alterado para '_'
+):
+    """Retorna a trilha de auditoria completa da aplicação (ações executadas por usuários).
+
+    Apenas administradores têm acesso a este relatório em modo SOMENTE LEITURA.
+    """
+    logs = await repository.listar_logs_auditoria(
+        conn, usuario_id=usuario_id, limite=limite
+    )
+    return logs
 
 
 @app.get("/logs", response_model=list[LogMaquinaResponse], tags=["Telemetria e Logs"])
@@ -213,9 +241,9 @@ async def listar_historico_de_logs(
         le=1000,
     ),
     conn: asyncpg.Connection = Depends(get_db),
-    usuario_atual: FuncionarioResponse = Depends(
+    _: FuncionarioResponse = Depends(
         auth.PermissaoRequerida(["ADMIN", "OPERADOR", "MANUTENCAO"])
-    ),
+    ),  # <- 'usuario_atual' alterado para '_'
 ):
     """Retorna o histórico de logs das máquinas com opções de filtros por período."""
     if periodo == "customizado" and (not data_inicio or not data_fim):

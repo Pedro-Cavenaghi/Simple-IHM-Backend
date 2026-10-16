@@ -47,6 +47,39 @@ async def registrar_auditoria(
         return False
 
 
+async def listar_logs_auditoria(
+    conn: asyncpg.Connection, usuario_id: int | None = None, limite: int = 100
+) -> list[dict]:
+    """
+    Retorna os registros de auditoria com INNER/LEFT JOIN trazendo
+    o nome e e-mail do usuário que executou a ação.
+    """
+    try:
+        sql = """
+            SELECT 
+                a.id,
+                a.usuario_id,
+                f.nome AS usuario_nome,
+                f.email AS usuario_email,
+                f.perfil AS usuario_perfil,
+                a.acao,
+                a.entidade,
+                a.entidade_id,
+                a.detalhes,
+                a.criado_em
+            FROM public.audit_logs a
+            LEFT JOIN public.funcionarios f ON a.usuario_id = f.id
+            WHERE ($1::INT IS NULL OR a.usuario_id = $1)
+            ORDER BY a.criado_em DESC
+            LIMIT $2;
+        """
+        registros = await conn.fetch(sql, usuario_id, limite)
+        return [dict(row) for row in registros]
+    except Exception as e:
+        print(f"Erro ao listar logs de auditoria: {e}")
+        return []
+
+
 # ==========================================
 # TELEMETRIA E HISTÓRICO DOS SENSORES (IoT)
 # ==========================================

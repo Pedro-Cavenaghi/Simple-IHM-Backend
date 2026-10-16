@@ -21,6 +21,24 @@ class StatusMaquina(str, Enum):
 
 
 # ==========================================
+# LOGS DE AUDITORIA
+# ==========================================
+
+
+class AuditLogResponse(BaseModel):
+    id: int
+    usuario_id: int | None = None
+    usuario_nome: str | None = None
+    usuario_email: str | None = None
+    usuario_perfil: str | None = None
+    acao: str
+    entidade: str
+    entidade_id: int | None = None
+    detalhes: str | None = None
+    criado_em: datetime
+
+
+# ==========================================
 # TELEMETRIA E LEITURA DE SENSORES (ESP32 / SIMULADOR)
 # ==========================================
 
