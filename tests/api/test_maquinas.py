@@ -7,7 +7,7 @@ import app.main as main_module
 
 
 @pytest.mark.asyncio
-async def test_listar_maquinas(client, monkeypatch):
+async def test_listar_maquinas(client_admin, monkeypatch):
     maquinas = [
         {
             "id": 1,
@@ -26,7 +26,7 @@ async def test_listar_maquinas(client, monkeypatch):
         mock_repository,
     )
 
-    response = await client.get("/maquinas")
+    response = await client_admin.get("/maquinas")
 
     assert response.status_code == 200
 
@@ -41,7 +41,7 @@ async def test_listar_maquinas(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_obter_maquina_por_id(client, monkeypatch):
+async def test_obter_maquina_por_id(client_admin, monkeypatch):
     maquina = {
         "id": 1,
         "tag_maquina": "INJ-01",
@@ -56,7 +56,7 @@ async def test_obter_maquina_por_id(client, monkeypatch):
         AsyncMock(return_value=maquina),
     )
 
-    response = await client.get("/maquinas/1")
+    response = await client_admin.get("/maquinas/1")
 
     assert response.status_code == 200
     assert response.json()["id"] == 1
@@ -64,14 +64,14 @@ async def test_obter_maquina_por_id(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_obter_maquina_inexistente(client, monkeypatch):
+async def test_obter_maquina_inexistente(client_admin, monkeypatch):
     monkeypatch.setattr(
         main_module.repository,
         "obter_maquina_por_id",
         AsyncMock(return_value=None),
     )
 
-    response = await client.get("/maquinas/999")
+    response = await client_admin.get("/maquinas/999")
 
     assert response.status_code == 404
     assert response.json()["detail"] == (
@@ -80,7 +80,7 @@ async def test_obter_maquina_inexistente(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_cadastrar_maquina(client, monkeypatch):
+async def test_cadastrar_maquina(client_admin, monkeypatch):
     maquina_criada = {
         "id": 1,
         "tag_maquina": "INJ-01",
@@ -97,7 +97,7 @@ async def test_cadastrar_maquina(client, monkeypatch):
         mock_repository,
     )
 
-    response = await client.post(
+    response = await client_admin.post(
         "/maquinas",
         json={
             "tag_maquina": "INJ-01",
@@ -114,14 +114,14 @@ async def test_cadastrar_maquina(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_atualizar_maquina(client, monkeypatch):
+async def test_atualizar_maquina(client_admin, monkeypatch):
     monkeypatch.setattr(
         main_module.repository,
         "atualizar_maquina",
         AsyncMock(return_value=True),
     )
 
-    response = await client.put(
+    response = await client_admin.put(
         "/maquinas/1",
         json={
             "tag_maquina": "INJ-02",
@@ -137,27 +137,27 @@ async def test_atualizar_maquina(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_deletar_maquina(client, monkeypatch):
+async def test_deletar_maquina(client_admin, monkeypatch):
     monkeypatch.setattr(
         main_module.repository,
         "soft_delete_maquina",
         AsyncMock(return_value=True),
     )
 
-    response = await client.delete("/maquinas/1")
+    response = await client_admin.delete("/maquinas/1")
 
     assert response.status_code == 200
     assert response.json()["status"] == "Sucesso"
 
 
 @pytest.mark.asyncio
-async def test_deletar_maquina_inexistente(client, monkeypatch):
+async def test_deletar_maquina_inexistente(client_admin, monkeypatch):
     monkeypatch.setattr(
         main_module.repository,
         "soft_delete_maquina",
         AsyncMock(return_value=False),
     )
 
-    response = await client.delete("/maquinas/999")
+    response = await client_admin.delete("/maquinas/999")
 
     assert response.status_code == 404

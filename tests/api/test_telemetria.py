@@ -1,13 +1,13 @@
 from datetime import datetime
 from unittest.mock import AsyncMock
-
+from app import auth
 import pytest
 
 import app.main as main_module
 
 
 @pytest.mark.asyncio
-async def test_listar_status_maquinas(client, monkeypatch):
+async def test_listar_status_maquinas(client_operador, monkeypatch):
     maquinas = [
         {
             "maquina_id": 1,
@@ -31,7 +31,7 @@ async def test_listar_status_maquinas(client, monkeypatch):
         mock_repository,
     )
 
-    response = await client.get("/status-maquinas")
+    response = await client_operador.get("/status-maquinas")
 
     dados = response.json()
 
@@ -44,7 +44,7 @@ async def test_listar_status_maquinas(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_listar_status_por_id(client, monkeypatch):
+async def test_listar_status_por_id(client_operador, monkeypatch):
     maquina = {
         "maquina_id": 1,
         "tag_maquina": "INJ-01",
@@ -66,7 +66,7 @@ async def test_listar_status_por_id(client, monkeypatch):
         mock_repository,
     )
 
-    response = await client.get("/status-maquinas/1")
+    response = await client_operador.get("/status-maquinas/1")
 
     dados = response.json()
 
@@ -78,7 +78,7 @@ async def test_listar_status_por_id(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_listar_status_por_id_inexistente(client, monkeypatch):
+async def test_listar_status_por_id_inexistente(client_operador, monkeypatch):
     mock_repository = AsyncMock(return_value=None)
 
     monkeypatch.setattr(
@@ -87,7 +87,7 @@ async def test_listar_status_por_id_inexistente(client, monkeypatch):
         mock_repository,
     )
 
-    response = await client.get("/status-maquinas/999")
+    response = await client_operador.get("/status-maquinas/999")
 
     dados = response.json()
 
@@ -120,13 +120,14 @@ async def test_enviar_dados_com_sucesso(client, monkeypatch):
     response = await client.post(
         "/enviar-dados",
         json=payload,
+        headers={"X-API-Key": auth.API_KEY},
     )
 
     dados = response.json()
 
     assert response.status_code == 200
     assert dados["status"] == "Sucesso"
-    assert dados["mensagem"] == "Dados gravados"
+    assert dados["mensagem"] == "Dados gravados e transmitidos em tempo real"
 
     mock_repository.assert_awaited_once()
 
@@ -154,6 +155,7 @@ async def test_enviar_dados_com_erro_no_repository(client, monkeypatch):
     response = await client.post(
         "/enviar-dados",
         json=payload,
+        headers={"X-API-Key": auth.API_KEY},
     )
 
     dados = response.json()
@@ -189,6 +191,7 @@ async def test_enviar_dados_com_tensao_invalida(client, monkeypatch):
     response = await client.post(
         "/enviar-dados",
         json=payload,
+        headers={"X-API-Key": auth.API_KEY},
     )
 
     assert response.status_code == 422
@@ -219,6 +222,7 @@ async def test_enviar_dados_com_maquina_id_invalido(client, monkeypatch):
     response = await client.post(
         "/enviar-dados",
         json=payload,
+        headers={"X-API-Key": auth.API_KEY},
     )
 
     assert response.status_code == 422
@@ -249,6 +253,7 @@ async def test_enviar_dados_com_status_invalido(client, monkeypatch):
     response = await client.post(
         "/enviar-dados",
         json=payload,
+        headers={"X-API-Key": auth.API_KEY},
     )
 
     assert response.status_code == 422
