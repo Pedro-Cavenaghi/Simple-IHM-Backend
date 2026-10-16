@@ -1,35 +1,38 @@
-# Teste 1
+import os
+import warnings
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Depends, status, Query
-from fastapi.responses import FileResponse
+from datetime import date, datetime
+
+import asyncpg
+from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
-from pydantic import BaseModel
-from datetime import datetime, date
-import os
-import asyncpg
-import warnings
+from fastapi.responses import FileResponse
 from passlib.context import CryptContext
+from pydantic import BaseModel
 
-from .database import Database, get_db
 import app.repository as repository
 from app import auth
+from app.database import Database, get_db
 
-# Importações internas
+# Importação do gerenciador de WebSockets
+from app.websocket_manager import manager
+
+# Importações internas dos modelos
 from .models import (
-    LeituraSensor,
-    MaquinaStatusResponse,
-    MaquinaCreate,
-    MaquinaResponse,
-    MaquinaUpdate,
     FuncionarioCreate,
     FuncionarioResponse,
     FuncionarioUpdate,
-    ManutencaoPreventivaCreate,
-    ManutencaoPreventivaUpdate,
-    ManutencaoPreventivaResponse,
-    ManutencaoPreventivaDetalhadaResponse,
+    LeituraSensor,
     LogMaquinaResponse,
+    ManutencaoPreventivaCreate,
+    ManutencaoPreventivaDetalhadaResponse,
+    ManutencaoPreventivaResponse,
+    ManutencaoPreventivaUpdate,
+    MaquinaCreate,
+    MaquinaResponse,
+    MaquinaStatusResponse,
+    MaquinaUpdate,
 )
 
 warnings.filterwarnings("ignore", category=UserWarning, module="passlib")
@@ -64,7 +67,6 @@ app = FastAPI(
     docs_url=None,
 )
 
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -93,7 +95,61 @@ async def favicon():
     return FileResponse(os.path.join(BASE_DIR, "..", "favicon.ico"))
 
 
-# --- ENDPOINTS DE TELEMETRIA (IOT) ---
+# ==========================================
+# WEBSOCKET & TELEMETRIA IOT EM TEMPO REAL
+# ==========================================
+
+
+@app.websocket("/ws/telemetria")
+async def websocket_telemetria(websocket: WebSocket, token: str | None = Query(None)):
+    """Canal de transmissão em tempo real para o Dashboard React.
+
+    Autenticação via JWT no parâmetro da URL: /ws/telemetria?token=eyJhbG...
+    """
+    # 1. Valida o Token JWT no Handshake do WebSocket
+    if not token or not auth.validar_token_jwt_simples(token):
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
+    # 2. Registra o cliente React no Gerenciador de Conexões
+    await manager.connect(websocket)
+    try:
+        while True:
+            # Mantém a conexão ativa escutando pings do cliente
+            await websocket.receive_text()
+    except Exception:
+        manager.disconnect(websocket)
+
+
+@app.post("/enviar-dados", status_code=status.HTTP_200_OK, tags=["Telemetria IoT"])
+async def receber_dados(
+    leitura: LeituraSensor,
+    conn: asyncpg.Connection = Depends(get_db),
+    _: str = Depends(
+        auth.verificar_api_key
+    ),  # Trava o endpoint exigindo X-API-Key da ESP32
+):
+    """Endpoint consumido pela ESP32 / Simulador para gravar os logs históricos no
+
+    PostgreSQL e transmitir as atualizações instantaneamente via WebSocket para
+    o React.
+    """
+    dados_leitura = leitura.model_dump()
+
+    # 1. Salva a leitura no banco de dados
+    sucesso = await repository.salvar_leitura(conn, dados_leitura)
+
+    if sucesso:
+        # 2. Transmite os novos dados recebidos via WebSocket Broadcast para os navegadores
+        await manager.broadcast(dados_leitura)
+        return {
+            "status": "Sucesso",
+            "mensagem": "Dados gravados e transmitidos em tempo real",
+        }
+
+    raise HTTPException(
+        status_code=500, detail="Erro ao gravar os dados de telemetria no banco"
+    )
 
 
 @app.get(
@@ -101,10 +157,13 @@ async def favicon():
     response_model=list[MaquinaStatusResponse],
     tags=["Telemetria IoT"],
 )
-async def listar_status_maquinas(conn: asyncpg.Connection = Depends(get_db)):
-    """
-    Retorna o estado atual de todas as máquinas para os cards em tempo real do React.
-    """
+async def listar_status_maquinas(
+    conn: asyncpg.Connection = Depends(get_db),
+    usuario_atual: FuncionarioResponse = Depends(
+        auth.PermissaoRequerida(["ADMIN", "OPERADOR", "MANUTENCAO"])
+    ),
+):
+    """Retorna o estado atualizado de todas as máquinas."""
     dados = await repository.obter_status_atual(conn)
     return [dict(row) for row in dados]
 
@@ -115,35 +174,22 @@ async def listar_status_maquinas(conn: asyncpg.Connection = Depends(get_db)):
     tags=["Telemetria IoT"],
 )
 async def listar_status_por_id(
-    maquina_id: int, conn: asyncpg.Connection = Depends(get_db)
+    maquina_id: int,
+    conn: asyncpg.Connection = Depends(get_db),
+    usuario_atual: FuncionarioResponse = Depends(
+        auth.PermissaoRequerida(["ADMIN", "OPERADOR", "MANUTENCAO"])
+    ),
 ):
-    """
-    Retorna o status de uma única máquina específica.
-    """
+    """Retorna o status de uma única máquina específica."""
     dados = await repository.obter_status_por_id(conn, maquina_id)
     if not dados:
         raise HTTPException(status_code=404, detail="Status da máquina não encontrado.")
     return dict(dados)
 
 
-@app.post("/enviar-dados", status_code=status.HTTP_200_OK, tags=["Telemetria IoT"])
-async def receber_dados(
-    leitura: LeituraSensor, conn: asyncpg.Connection = Depends(get_db)
-):
-    """
-    Endpoint consumido pela ESP32 / Simulador para registrar logs históricos
-    e atualizar o painel em tempo real (UPSERT).
-    """
-    sucesso = await repository.salvar_leitura(conn, leitura.model_dump())
-    if sucesso:
-        return {"status": "Sucesso", "mensagem": "Dados gravados"}
-    else:
-        raise HTTPException(
-            status_code=500, detail="Erro ao gravar os dados de telemetria no banco"
-        )
-
-
-# --- ENDPOINT DE TELEMETRIA E HISTÓRICO DE LOGS (DASHBOARD) ---
+# ==========================================
+# HISTÓRICO DE LOGS E AUTENTICAÇÃO DE USUÁRIOS
+# ==========================================
 
 
 @app.get("/logs", response_model=list[LogMaquinaResponse], tags=["Telemetria e Logs"])
@@ -165,18 +211,20 @@ async def listar_historico_de_logs(
         description="Limite máximo de registros retornados para evitar overhead",
         ge=1,
         le=1000,
-    ),  # <-- Adicionado com validação (mínimo 1, máximo 1000)
+    ),
     conn: asyncpg.Connection = Depends(get_db),
+    usuario_atual: FuncionarioResponse = Depends(
+        auth.PermissaoRequerida(["ADMIN", "OPERADOR", "MANUTENCAO"])
+    ),
 ):
-    """
-    Retorna a lista de telemetria histórica/logs das máquinas da planta industrial.
-    Permite filtros rápidos por períodos (hoje, semana, mês) ou intervalos customizados.
-    """
-
+    """Retorna o histórico de logs das máquinas com opções de filtros por período."""
     if periodo == "customizado" and (not data_inicio or not data_fim):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Para buscas com o período 'customizado', você deve informar as datas de início e fim.",
+            detail=(
+                "Para buscas com o período 'customizado', você deve informar as"
+                " datas de início e fim."
+            ),
         )
 
     logs = await repository.buscar_historico_logs(
@@ -199,7 +247,6 @@ async def login(credenciais: LoginRequest, conn: asyncpg.Connection = Depends(ge
     if not funcionario or not pwd_context.verify(
         credenciais.senha, funcionario["senha_hash"]
     ):
-        # Auditoria de tentativa falha
         if funcionario:
             await repository.registrar_auditoria(
                 conn=conn,
@@ -215,7 +262,7 @@ async def login(credenciais: LoginRequest, conn: asyncpg.Connection = Depends(ge
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # Gera JWT
+    # Gera JWT contendo ID, e-mail e perfil (Role)
     access_token = auth.criar_token_acesso(
         dados={
             "sub": str(funcionario["id"]),
@@ -224,7 +271,6 @@ async def login(credenciais: LoginRequest, conn: asyncpg.Connection = Depends(ge
         }
     )
 
-    # Auditoria de login bem-sucedido
     await repository.registrar_auditoria(
         conn=conn,
         usuario_id=funcionario["id"],
@@ -246,25 +292,36 @@ async def login(credenciais: LoginRequest, conn: asyncpg.Connection = Depends(ge
     }
 
 
-# --- CRUD MAQUINAS ---
+# ==========================================
+# CRUD MÁQUINAS
+# ==========================================
 
 
 @app.get("/maquinas", response_model=list[MaquinaResponse], tags=["CRUD Máquinas"])
-async def listar_maquinas(conn: asyncpg.Connection = Depends(get_db)):
-    """
-    Retorna a lista de todas as máquinas ativas (sem Soft Delete).
-    """
+async def listar_maquinas(
+    conn: asyncpg.Connection = Depends(get_db),
+    usuario_atual: FuncionarioResponse = Depends(
+        auth.PermissaoRequerida(["ADMIN", "OPERADOR", "MANUTENCAO"])
+    ),
+):
+    """Retorna a lista de todas as máquinas ativas."""
     maquinas = await repository.listar_maquinas_cadastradas(conn)
     return maquinas
 
 
 @app.get(
-    "/maquinas/{maquina_id}", response_model=MaquinaResponse, tags=["CRUD Máquinas"]
+    "/maquinas/{maquina_id}",
+    response_model=MaquinaResponse,
+    tags=["CRUD Máquinas"],
 )
-async def obter_maquina(maquina_id: int, conn: asyncpg.Connection = Depends(get_db)):
-    """
-    Retorna os detalhes de uma máquina específica pelo ID.
-    """
+async def obter_maquina(
+    maquina_id: int,
+    conn: asyncpg.Connection = Depends(get_db),
+    usuario_atual: FuncionarioResponse = Depends(
+        auth.PermissaoRequerida(["ADMIN", "OPERADOR", "MANUTENCAO"])
+    ),
+):
+    """Retorna os detalhes de uma máquina específica."""
     maquina = await repository.obter_maquina_por_id(conn, maquina_id)
     if not maquina:
         raise HTTPException(
@@ -275,61 +332,48 @@ async def obter_maquina(maquina_id: int, conn: asyncpg.Connection = Depends(get_
 
 
 @app.post(
-    "/maquinas", response_model=MaquinaResponse, status_code=201, tags=["CRUD Máquinas"]
+    "/maquinas",
+    response_model=MaquinaResponse,
+    status_code=201,
+    tags=["CRUD Máquinas"],
 )
 async def post_maquina(
-    maquina_dados: MaquinaCreate, conn: asyncpg.Connection = Depends(get_db)
+    maquina_dados: MaquinaCreate,
+    conn: asyncpg.Connection = Depends(get_db),
+    usuario_atual: FuncionarioResponse = Depends(auth.PermissaoRequerida(["ADMIN"])),
 ):
-    """
-    Cadastra uma nova máquina no ecossistema industrial.
-    """
+    """Cadastra uma nova máquina na planta industrial."""
     dados_repositorio = maquina_dados.model_dump()
 
     try:
         nova_maquina = await repository.cadastrar_maquina(conn, dados_repositorio)
-
         if not nova_maquina:
             raise HTTPException(
                 status_code=500, detail="Erro interno ao registrar a máquina."
             )
-
         return dict(nova_maquina)
-
     except asyncpg.UniqueViolationError:
         raise HTTPException(
             status_code=400,
-            detail=f"A TAG '{maquina_dados.tag_maquina.upper()}' já está cadastrada em outra máquina ativa.",
+            detail=(
+                f"A TAG '{maquina_dados.tag_maquina.upper()}' já está cadastrada em"
+                " outra máquina ativa."
+            ),
         )
-
-
-@app.delete("/maquinas/{maquina_id}", tags=["CRUD Máquinas"])
-async def deletar_maquina(maquina_id: int, conn: asyncpg.Connection = Depends(get_db)):
-    """
-    Aplica exclusão lógica em uma máquina, preservando logs e histórico.
-    """
-    sucesso = await repository.soft_delete_maquina(conn, maquina_id)
-    if not sucesso:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Máquina não encontrada ou já removida do sistema.",
-        )
-    return {
-        "status": "Sucesso",
-        "mensagem": f"Máquina {maquina_id} desativada logicamente.",
-    }
 
 
 @app.put(
-    "/maquinas/{maquina_id}", response_model=MaquinaResponse, tags=["CRUD Máquinas"]
+    "/maquinas/{maquina_id}",
+    response_model=MaquinaResponse,
+    tags=["CRUD Máquinas"],
 )
 async def atualizar_cadastro_maquina(
     maquina_id: int,
     maquina_dados: MaquinaUpdate,
     conn: asyncpg.Connection = Depends(get_db),
+    usuario_atual: FuncionarioResponse = Depends(auth.PermissaoRequerida(["ADMIN"])),
 ):
-    """
-    Altera os dados cadastrais de uma máquina.
-    """
+    """Altera os dados cadastrais de uma máquina."""
     try:
         sucesso = await repository.atualizar_maquina(
             conn, maquina_id, maquina_dados.model_dump()
@@ -351,12 +395,34 @@ async def atualizar_cadastro_maquina(
     except asyncpg.UniqueViolationError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"A Tag '{maquina_dados.tag_maquina.upper()}' já está sendo usada por outra máquina.",
+            detail=(
+                f"A Tag '{maquina_dados.tag_maquina.upper()}' já está sendo usada"
+                " por outra máquina."
+            ),
         )
 
 
+@app.delete("/maquinas/{maquina_id}", tags=["CRUD Máquinas"])
+async def deletar_maquina(
+    maquina_id: int,
+    conn: asyncpg.Connection = Depends(get_db),
+    usuario_atual: FuncionarioResponse = Depends(auth.PermissaoRequerida(["ADMIN"])),
+):
+    """Aplica Soft Delete em uma máquina."""
+    sucesso = await repository.soft_delete_maquina(conn, maquina_id)
+    if not sucesso:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Máquina não encontrada ou já removida do sistema.",
+        )
+    return {
+        "status": "Sucesso",
+        "mensagem": f"Máquina {maquina_id} desativada logicamente.",
+    }
+
+
 # ==========================================
-# ENDPOINTS DO CRUD DO DASHBOARD (FUNCIONÁRIOS)
+# CRUD FUNCIONÁRIOS
 # ==========================================
 
 
@@ -369,9 +435,7 @@ async def listar_funcionarios(
     conn: asyncpg.Connection = Depends(get_db),
     usuario_atual: FuncionarioResponse = Depends(auth.PermissaoRequerida(["ADMIN"])),
 ):
-    """
-    Retorna a lista de funcionários ativos (que não sofreram soft delete) para a tabela do Dashboard.
-    """
+    """Retorna a lista de funcionários ativos."""
     funcionarios = await repository.listar_funcionarios_ativos(conn)
     return funcionarios
 
@@ -387,13 +451,8 @@ async def cadastrar_funcionario(
     conn: asyncpg.Connection = Depends(get_db),
     usuario_atual: FuncionarioResponse = Depends(auth.PermissaoRequerida(["ADMIN"])),
 ):
-    """
-    Cadastra um novo funcionário com e-mail normalizado (minúsculas/sem espaços)
-    e hash de senha seguro. Registra o evento no audit_logs vinculando ao ADMIN executante.
-    """
+    """Cadastra um novo funcionário com senha criptografada e auditoria."""
     dados_repositorio = funcionario.model_dump()
-
-    # Normalização de dados
     dados_repositorio["email"] = funcionario.email.lower().strip()
 
     senha_puro = dados_repositorio.pop("senha")
@@ -405,17 +464,20 @@ async def cadastrar_funcionario(
         if not id_gerado:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Erro interno ao registrar o funcionário no banco de dados.",
+                detail=("Erro interno ao registrar o funcionário no banco de dados."),
             )
 
-        # 📝 AUDITORIA: Registra a criação do novo funcionário
         await repository.registrar_auditoria(
             conn=conn,
             usuario_id=usuario_atual.id,
             acao="CRIAR_FUNCIONARIO",
             entidade="funcionarios",
             entidade_id=id_gerado,
-            detalhes=f"Criou o funcionário '{funcionario.nome}' ({dados_repositorio['email']}) com perfil '{funcionario.perfil}'.",
+            detalhes=(
+                f"Criou o funcionário '{funcionario.nome}'"
+                f" ({dados_repositorio['email']}) com perfil"
+                f" '{funcionario.perfil}'."
+            ),
         )
 
         return {
@@ -445,9 +507,7 @@ async def get_funcionario_por_id(
     conn: asyncpg.Connection = Depends(get_db),
     usuario_atual: FuncionarioResponse = Depends(auth.PermissaoRequerida(["ADMIN"])),
 ):
-    """
-    Retorna os detalhes de um funcionário específico pelo ID.
-    """
+    """Retorna detalhes de um funcionário específico."""
     funcionario = await repository.obter_funcionario_por_id(conn, funcionario_id)
     if not funcionario:
         raise HTTPException(
@@ -467,10 +527,7 @@ async def put_funcionario(
     conn: asyncpg.Connection = Depends(get_db),
     usuario_atual: FuncionarioResponse = Depends(auth.PermissaoRequerida(["ADMIN"])),
 ):
-    """
-    Atualiza os dados cadastrais administrativos de um funcionário.
-    A alteração de senha é bloqueada e isolada deste fluxo.
-    """
+    """Atualiza dados cadastrais de um funcionário."""
     dados_repositorio = funcionario_dados.model_dump()
 
     try:
@@ -482,14 +539,16 @@ async def put_funcionario(
                 status_code=404, detail="Funcionário não encontrado ou inativo."
             )
 
-        # 📝 AUDITORIA: Registra a alteração dos dados cadastrais
         await repository.registrar_auditoria(
             conn=conn,
             usuario_id=usuario_atual.id,
             acao="ATUALIZAR_FUNCIONARIO",
             entidade="funcionarios",
             entidade_id=funcionario_id,
-            detalhes=f"Atualizou o cadastro do funcionário '{funcionario_dados.nome}' (Perfil: '{funcionario_dados.perfil}').",
+            detalhes=(
+                f"Atualizou o cadastro do funcionário '{funcionario_dados.nome}'"
+                f" (Perfil: '{funcionario_dados.perfil}')."
+            ),
         )
 
         return {
@@ -508,18 +567,13 @@ async def put_funcionario(
         )
 
 
-@app.delete(
-    "/funcionarios/{funcionario_id}",
-    tags=["CRUD Funcionários"],
-)
+@app.delete("/funcionarios/{funcionario_id}", tags=["CRUD Funcionários"])
 async def deletar_funcionario(
     funcionario_id: int,
     conn: asyncpg.Connection = Depends(get_db),
     usuario_atual: FuncionarioResponse = Depends(auth.PermissaoRequerida(["ADMIN"])),
 ):
-    """
-    Aplica Soft Delete em um funcionário do sistema. O registro permanece no banco para auditoria.
-    """
+    """Aplica Soft Delete em um funcionário."""
     sucesso = await repository.soft_delete_funcionario(conn, funcionario_id)
     if not sucesso:
         raise HTTPException(
@@ -527,7 +581,6 @@ async def deletar_funcionario(
             detail="Funcionário não encontrado ou já deletado.",
         )
 
-    # 📝 AUDITORIA: Registra a desativação (soft delete)
     await repository.registrar_auditoria(
         conn=conn,
         usuario_id=usuario_atual.id,
@@ -544,7 +597,7 @@ async def deletar_funcionario(
 
 
 # ==========================================
-# ENDPOINTS DO PLANO DE MANUTENÇÃO (PREVENTIVA / PREDITIVA)
+# PLANO DE MANUTENÇÃO (PREVENTIVA / PREDITIVA)
 # ==========================================
 
 
@@ -561,26 +614,28 @@ async def agendar_nova_manutencao(
         auth.PermissaoRequerida(["ADMIN", "MANUTENCAO"])
     ),
 ):
-    """
-    Agenda uma nova intervenção (Preventiva ou Preditiva) para uma máquina da planta.
-    A ordem nasce com o status 'concluida = false'.
-    """
+    """Agenda uma nova ordem de manutenção."""
     nova_manutencao = await repository.agendar_manutencao(conn, manutencao.model_dump())
 
     if not nova_manutencao:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Erro ao agendar manutenção. Verifique se a máquina informada existe e está ativa.",
+            detail=(
+                "Erro ao agendar manutenção. Verifique se a máquina informada"
+                " existe e está ativa."
+            ),
         )
 
-    # 📝 AUDITORIA: Registra o agendamento vinculando ao usuário logado
     await repository.registrar_auditoria(
         conn=conn,
         usuario_id=usuario_atual.id,
         acao="AGENDAR_MANUTENCAO",
         entidade="manutencao_preventiva",
         entidade_id=nova_manutencao["id"],
-        detalhes=f"Agendou manutenção '{nova_manutencao['tipo_manutencao']}' para a Máquina ID {nova_manutencao['maquina_id']}.",
+        detalhes=(
+            f"Agendou manutenção '{nova_manutencao['tipo_manutencao']}' para a"
+            f" Máquina ID {nova_manutencao['maquina_id']}."
+        ),
     )
 
     return nova_manutencao
@@ -597,10 +652,7 @@ async def listar_todas_manutencoes(
         auth.PermissaoRequerida(["ADMIN", "MANUTENCAO"])
     ),
 ):
-    """
-    Retorna a lista completa de manutenções trazendo as tags/nomes das máquinas
-    e os nomes dos técnicos via LEFT JOIN (ideal para a tabela do Dashboard).
-    """
+    """Retorna a lista completa de manutenções detalhadas."""
     return await repository.listar_manutencoes_detalhadas(conn)
 
 
@@ -616,9 +668,7 @@ async def obter_manutencao_por_id(
         auth.PermissaoRequerida(["ADMIN", "MANUTENCAO"])
     ),
 ):
-    """
-    Busca os detalhes completos de uma ordem de manutenção específica pelo ID.
-    """
+    """Busca os detalhes de uma ordem de manutenção pelo ID."""
     manutencao = await repository.obter_manutencao_por_id(conn, manutencao_id)
     if not manutencao:
         raise HTTPException(
@@ -641,27 +691,28 @@ async def atualizar_dados_manutencao(
         auth.PermissaoRequerida(["ADMIN", "MANUTENCAO"])
     ),
 ):
-    """
-    Modifica a descrição, data ou tipo de uma manutenção, desde que ela ainda esteja ABERTA.
-    Retorna os dados ricos atualizados para sincronia do estado no React.
-    """
+    """Atualiza informações de uma ordem de manutenção aberta."""
     sucesso = await repository.atualizar_dados_manutencao(
         conn, manutencao_id, dados_novos.model_dump()
     )
     if not sucesso:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Não foi possível atualizar. A ordem pode não existir ou já está CONCLUÍDA.",
+            detail=(
+                "Não foi possível atualizar. A ordem pode não existir ou já está"
+                " CONCLUÍDA."
+            ),
         )
 
-    # 📝 AUDITORIA: Registra a atualização do agendamento
     await repository.registrar_auditoria(
         conn=conn,
         usuario_id=usuario_atual.id,
         acao="ATUALIZAR_MANUTENCAO",
         entidade="manutencao_preventiva",
         entidade_id=manutencao_id,
-        detalhes=f"Atualizou dados/agendamento da ordem de manutenção ID {manutencao_id}.",
+        detalhes=(
+            f"Atualizou dados/agendamento da ordem de manutenção ID {manutencao_id}."
+        ),
     )
 
     registro_atualizado = await repository.obter_manutencao_por_id(conn, manutencao_id)
@@ -680,21 +731,19 @@ async def concluir_ordem_manutencao(
         auth.PermissaoRequerida(["ADMIN", "MANUTENCAO"])
     ),
 ):
-    """
-    Dá baixa/encerra a ordem de manutenção. O banco registrará o timestamp exato do NOW()
-    e atribuirá o técnico logado no JWT.
-    """
-    # Usa o ID do usuário autenticado no JWT para dar baixa na ordem
+    """Encerra a ordem de manutenção vinculando ao técnico logado no JWT."""
     sucesso = await repository.concluir_ordem_manutencao(
         conn, manutencao_id, usuario_atual.id
     )
     if not sucesso:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Falha ao encerrar ordem. Verifique se a ordem existe ou se já foi fechada.",
+            detail=(
+                "Falha ao encerrar ordem. Verifique se a ordem existe ou se já foi"
+                " fechada."
+            ),
         )
 
-    # 📝 AUDITORIA: Registra o encerramento da manutenção
     await repository.registrar_auditoria(
         conn=conn,
         usuario_id=usuario_atual.id,
@@ -708,10 +757,7 @@ async def concluir_ordem_manutencao(
     return registro_atualizado
 
 
-@app.delete(
-    "/manutencoes/{manutencao_id}",
-    tags=["Plano de Manutenção"],
-)
+@app.delete("/manutencoes/{manutencao_id}", tags=["Plano de Manutenção"])
 async def deletar_manutencao_logica(
     manutencao_id: int,
     conn: asyncpg.Connection = Depends(get_db),
@@ -719,24 +765,27 @@ async def deletar_manutencao_logica(
         auth.PermissaoRequerida(["ADMIN", "MANUTENCAO"])
     ),
 ):
-    """
-    Aplica exclusão lógica (Soft Delete) em um agendamento, desde que a ordem esteja aberta.
-    """
+    """Aplica Soft Delete em uma manutenção aberta."""
     sucesso = await repository.soft_delete_manutencao(conn, manutencao_id)
     if not sucesso:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Não é possível remover. A ordem pode não existir, já foi concluída ou já foi excluída.",
+            detail=(
+                "Não é possível remover. A ordem pode não existir, já foi"
+                " concluída ou já foi excluída."
+            ),
         )
 
-    # 📝 AUDITORIA: Registra a remoção lógica
     await repository.registrar_auditoria(
         conn=conn,
         usuario_id=usuario_atual.id,
         acao="DELETAR_MANUTENCAO",
         entidade="manutencao_preventiva",
         entidade_id=manutencao_id,
-        detalhes=f"Cancelou/desativou (soft delete) a ordem de manutenção ID {manutencao_id}.",
+        detalhes=(
+            "Cancelou/desativou (soft delete) a ordem de manutenção ID"
+            f" {manutencao_id}."
+        ),
     )
 
     return {
