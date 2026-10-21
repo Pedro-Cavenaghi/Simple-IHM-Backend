@@ -31,7 +31,7 @@ Pygments==2.21.0
 pytest==9.1.1
 pytest-asyncio==1.4.0
 pytest-cov==7.1.0
-python-dotenv==1.2.2
+python-dotenv==1.2.4
 python-jose==3.5.0
 requests==2.34.2
 rsa==4.9.1
