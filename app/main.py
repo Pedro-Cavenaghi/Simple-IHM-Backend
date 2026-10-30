@@ -102,24 +102,35 @@ async def favicon():
 
 
 @app.websocket("/ws/telemetria")
-async def websocket_telemetria(websocket: WebSocket, token: str | None = Query(None)):
-    """Canal de transmissão em tempo real para o Dashboard React.
-
-    Autenticação via JWT no parâmetro da URL: /ws/telemetria?token=eyJhbG...
-    """
-    # 1. Valida o Token JWT no Handshake do WebSocket
+async def websocket_telemetria_global(
+    websocket: WebSocket, token: str | None = Query(None)
+):
     if not token or not auth.validar_token_jwt_simples(token):
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
-    # 2. Registra o cliente React no Gerenciador de Conexões
-    await manager.connect(websocket)
+    await manager.connect_global(websocket)
     try:
         while True:
-            # Mantém a conexão ativa escutando pings do cliente
             await websocket.receive_text()
     except Exception:
-        manager.disconnect(websocket)
+        manager.disconnect_global(websocket)
+
+
+@app.websocket("/ws/telemetria/{maquina_id}")
+async def websocket_telemetria_por_id(
+    websocket: WebSocket, maquina_id: int, token: str | None = Query(None)
+):
+    if not token or not auth.validar_token_jwt_simples(token):
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
+    await manager.connect_machine(websocket, maquina_id)
+    try:
+        while True:
+            await websocket.receive_text()  # Mantém o heartbeat / ping-pong
+    except Exception:
+        manager.disconnect_machine(websocket, maquina_id)
 
 
 @app.post("/enviar-dados", status_code=status.HTTP_200_OK, tags=["Telemetria IoT"])

@@ -2,6 +2,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from dotenv import load_dotenv
 from fastapi import Depends, HTTPException, Security, status
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
@@ -9,6 +10,9 @@ from jose import JWTError, jwt
 from app import repository
 from app.database import get_db
 from app.models import FuncionarioResponse
+
+# Carrega as variáveis do arquivo .env logo após os imports
+load_dotenv()
 
 # Configurações de Segurança
 SECRET_KEY = os.getenv("SECRET_KEY", "sua_chave_secreta_super_segura_aqui")
