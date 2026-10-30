@@ -1,6 +1,6 @@
 services:
   db:
-    image: postgres:15-alpine
+    image: postgres:18-alpine
     container_name: simple-ihm-postgres
     restart: always
     environment:
@@ -10,8 +10,8 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./dump-monitoramento_industrial-202610152208.sql:/docker-entrypoint-initdb.d/init.sql
+      - postgres_data_v18:/var/lib/postgresql
+      - ./database/backup-monitoramento_industrial.sql:/docker-entrypoint-initdb.d/01-backup.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U test_user -d monitoramento_industrial"]
       interval: 5s
@@ -31,4 +31,4 @@ services:
         condition: service_healthy
 
 volumes:
-  postgres_data:
+  postgres_data_v18:
