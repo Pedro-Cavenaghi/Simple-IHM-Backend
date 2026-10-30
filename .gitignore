@@ -7,3 +7,4 @@ README.txt
 .coverage
 coverage.xml
 database/seed_dev.sql
+database/backup-monitoramento_industrial.sql

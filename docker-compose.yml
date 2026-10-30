@@ -1,0 +1,34 @@
+services:
+  db:
+    image: postgres:18-alpine
+    container_name: simple-ihm-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: test_user
+      POSTGRES_PASSWORD: test_password
+      POSTGRES_DB: monitoramento_industrial
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data_v18:/var/lib/postgresql
+      - ./database/backup-monitoramento_industrial.sql:/docker-entrypoint-initdb.d/01-backup.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test_user -d monitoramento_industrial"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: .
+    container_name: simple-ihm-backend
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://test_user:test_password@db:5432/monitoramento_industrial
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres_data_v18:
