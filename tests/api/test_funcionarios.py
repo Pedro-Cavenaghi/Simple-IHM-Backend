@@ -1,7 +1,7 @@
 from unittest.mock import AsyncMock
 
 import pytest
-
+import asyncpg
 import app.main as main_module
 
 
@@ -233,3 +233,91 @@ async def test_deletar_funcionario_inexistente(client_admin, monkeypatch):
     response = await client_admin.delete("/funcionarios/999")
 
     assert response.status_code == 404
+
+    
+@pytest.mark.asyncio
+async def test_cadastrar_funcionario_sem_retorno(client_admin, monkeypatch):
+    monkeypatch.setattr(
+        main_module.repository,
+        "cadastrar_funcionario",
+        AsyncMock(return_value=None),
+    )
+
+    response = await client_admin.post(
+        "/funcionarios",
+        json={
+            "nome": "Maria Souza",
+            "cargo": "Operadora",
+            "turno_trabalho": 2,
+            "email": "maria@empresa.com",
+            "senha": "123456",
+            "perfil": "OPERADOR",
+        },
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Erro interno ao registrar o funcionário no banco de dados."
+    )
+
+
+@pytest.mark.asyncio
+async def test_cadastrar_funcionario_email_duplicado(client_admin, monkeypatch):
+    monkeypatch.setattr(
+        main_module.repository,
+        "cadastrar_funcionario",
+        AsyncMock(
+            side_effect=asyncpg.exceptions.UniqueViolationError(
+                "Email duplicado"
+            )
+        ),
+    )
+
+    response = await client_admin.post(
+        "/funcionarios",
+        json={
+            "nome": "Maria Souza",
+            "cargo": "Operadora",
+            "turno_trabalho": 2,
+            "email": "maria@empresa.com",
+            "senha": "123456",
+            "perfil": "OPERADOR",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "Já existe um funcionário ATIVO cadastrado com este e-mail."
+    )
+
+
+@pytest.mark.asyncio
+async def test_atualizar_funcionario_email_duplicado(
+    client_admin, monkeypatch
+):
+    monkeypatch.setattr(
+        main_module.repository,
+        "atualizar_funcionario",
+        AsyncMock(
+            side_effect=asyncpg.exceptions.UniqueViolationError(
+                "Email duplicado"
+            )
+        ),
+    )
+
+    response = await client_admin.put(
+        "/funcionarios/1",
+        json={
+            "nome": "João Atualizado",
+            "cargo": "Supervisor",
+            "turno_trabalho": 3,
+            "email": "joao.atualizado@empresa.com",
+            "ativo": True,
+            "perfil": "ADMIN",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "O e-mail informado já está em uso por outro usuário ativo."
+    )

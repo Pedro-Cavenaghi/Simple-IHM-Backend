@@ -18,8 +18,10 @@ def websocket_client():
 @pytest.fixture(autouse=True)
 def limpar_conexoes_websocket():
     manager.machine_connections.clear()
+    manager.global_connections.clear()
     yield
-    manager.machine_connections.clear()
+    manager.machine_connections.clear()                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 
+    manager.global_connections.clear()
 
 
 def test_websocket_por_id_rejeita_conexao_sem_token(websocket_client):
@@ -58,3 +60,54 @@ def test_websocket_por_id_conecta_maquina_com_token_valido(websocket_client):
         assert 42 in manager.machine_connections
 
     assert 42 not in manager.machine_connections
+
+    
+def test_websocket_global_rejeita_conexao_sem_token(websocket_client):
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with websocket_client.websocket_connect("/ws/telemetria"):
+            pass
+
+    assert exc_info.value.code == status.WS_1008_POLICY_VIOLATION
+    assert len(manager.global_connections) == 0
+
+
+def test_websocket_global_conecta_com_token_valido(websocket_client):
+    token = auth.criar_token_acesso(
+        {"sub": "1", "perfil": "ADMIN"}
+    )
+
+    with websocket_client.websocket_connect(
+        f"/ws/telemetria?token={token}"
+    ) as websocket:
+        assert len(manager.global_connections) == 1
+
+        websocket.send_text("ping")
+
+        assert len(manager.global_connections) == 1
+
+    assert len(manager.global_connections) == 0
+
+def test_websocket_global_rejeita_conexao_sem_token(websocket_client):
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with websocket_client.websocket_connect("/ws/telemetria"):
+            pass
+
+    assert exc_info.value.code == status.WS_1008_POLICY_VIOLATION
+    assert len(manager.global_connections) == 0
+
+
+def test_websocket_global_conecta_com_token_valido(websocket_client):
+    token = auth.criar_token_acesso({
+        "sub": "1",
+        "perfil": "ADMIN"
+    })
+
+    with websocket_client.websocket_connect(
+        f"/ws/telemetria?token={token}"
+    ) as websocket:
+        assert len(manager.global_connections) == 1
+
+        websocket.send_text("ping")
+        assert len(manager.global_connections) == 1
+
+    assert len(manager.global_connections) == 0
