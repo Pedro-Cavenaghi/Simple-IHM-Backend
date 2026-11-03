@@ -126,7 +126,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16
+        image: postgres:18
 
         env:
           POSTGRES_USER: test_user
@@ -172,13 +172,19 @@ jobs:
         env:
           PGPASSWORD: test_password
         run: |
-          psql \
-            -h localhost \
-            -p 5432 \
-            -U test_user \
-            -d simple_ihm_test \
-            -f database/schema.sql
-
+          docker run --rm \
+            --network host \
+            -e PGPASSWORD="$PGPASSWORD" \
+            -v "$GITHUB_WORKSPACE:/workspace" \
+            -w /workspace \
+            postgres:18 \
+            psql \
+              -h localhost \
+              -p 5432 \
+              -U test_user \
+              -d simple_ihm_test \
+              -v ON_ERROR_STOP=1 \
+              -f database/schema.sql
       - name: Run integration tests
         run: |
           python -m pytest tests/integration -v \

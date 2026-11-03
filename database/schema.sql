@@ -1,116 +1,408 @@
--- Schema de teste alinhado ao dump monitoramento_industrial de 2026-10-06.
--- Mantém audit_logs, pois essa tabela foi adicionada posteriormente no backend.
--- Não contém dados reais, usuários, hashes, roles ou configurações do cluster.
+--
+-- PostgreSQL database dump
+--
 
-CREATE TABLE IF NOT EXISTS maquinas (
-    id SERIAL PRIMARY KEY,
-    tag_maquina VARCHAR(20) NOT NULL,
-    nome_maquina VARCHAR(100) NOT NULL,
-    setor VARCHAR(50),
-    data_cadastro TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    ultima_atualizacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    deletado_em TIMESTAMP
+\restrict 4PJxnYOZlSKSf1oJyP83vyg40yc3IQ9lvnnOHUoUIDoATQdaNDP4uHTJonyWAf0
+
+-- Dumped from database version 18.6
+-- Dumped by pg_dump version 18.6
+
+SET statement_timeout = 0;
+SET lock_timeout = 0;
+SET idle_in_transaction_session_timeout = 0;
+SET transaction_timeout = 0;
+SET client_encoding = 'UTF8';
+SET standard_conforming_strings = on;
+SELECT pg_catalog.set_config('search_path', '', false);
+SET check_function_bodies = false;
+SET xmloption = content;
+SET client_min_messages = warning;
+SET row_security = off;
+
+--
+-- Name: pgcrypto; Type: EXTENSION; Schema: -; Owner: -
+--
+
+CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public;
+
+
+--
+-- Name: EXTENSION pgcrypto; Type: COMMENT; Schema: -; Owner: -
+--
+
+COMMENT ON EXTENSION pgcrypto IS 'cryptographic functions';
+
+
+SET default_tablespace = '';
+
+SET default_table_access_method = heap;
+
+--
+-- Name: audit_logs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.audit_logs (
+    id integer NOT NULL,
+    usuario_id integer,
+    acao character varying(50) NOT NULL,
+    entidade character varying(50) NOT NULL,
+    entidade_id integer,
+    detalhes text,
+    criado_em timestamp with time zone DEFAULT now()
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_maquinas_tag_ativa
-ON maquinas (UPPER(tag_maquina))
-WHERE deletado_em IS NULL;
 
-CREATE TABLE IF NOT EXISTS funcionarios (
-    id SERIAL PRIMARY KEY,
-    nome VARCHAR(100) NOT NULL,
-    cargo VARCHAR(50),
-    data_cadastro TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    deletado_em TIMESTAMP,
-    email VARCHAR(100) NOT NULL DEFAULT 'provisorio@empresa.com',
-    senha_hash VARCHAR(255) NOT NULL DEFAULT 'mudar_no_primeiro_acesso',
-    ultima_atualizacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    turno_trabalho INTEGER NOT NULL DEFAULT 1
-        CHECK (turno_trabalho IN (1, 2, 3)),
-    ativo BOOLEAN NOT NULL DEFAULT TRUE,
-    perfil VARCHAR(20) NOT NULL DEFAULT 'OPERADOR'
-        CHECK (perfil IN ('ADMIN', 'OPERADOR', 'MANUTENCAO'))
+--
+-- Name: audit_logs_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.audit_logs_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: audit_logs_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.audit_logs_id_seq OWNED BY public.audit_logs.id;
+
+
+--
+-- Name: funcionarios; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.funcionarios (
+    id integer NOT NULL,
+    nome character varying(100) NOT NULL,
+    cargo character varying(50),
+    data_cadastro timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    deletado_em timestamp without time zone,
+    email character varying(100) DEFAULT 'provisorio@empresa.com'::character varying NOT NULL,
+    senha_hash character varying(255) DEFAULT 'mudar_no_primeiro_acesso'::character varying NOT NULL,
+    ultima_atualizacao timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    turno_trabalho integer DEFAULT 1 NOT NULL,
+    ativo boolean DEFAULT true NOT NULL,
+    perfil character varying(20) DEFAULT 'OPERADOR'::character varying NOT NULL,
+    CONSTRAINT check_funcionario_perfil CHECK (((perfil)::text = ANY (ARRAY[('ADMIN'::character varying)::text, ('OPERADOR'::character varying)::text, ('MANUTENCAO'::character varying)::text]))),
+    CONSTRAINT check_turno_trabalho CHECK ((turno_trabalho = ANY (ARRAY[1, 2, 3])))
 );
 
-CREATE INDEX IF NOT EXISTS idx_funcionarios_ativos
-ON funcionarios (id)
-WHERE deletado_em IS NULL;
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_funcionarios_email_ativo
-ON funcionarios (LOWER(email))
-WHERE deletado_em IS NULL;
+--
+-- Name: funcionarios_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
 
--- Esta tabela não aparece no dump de 2026-10-06.
--- Foi preservada porque o backend atual já possui serviço de auditoria.
-CREATE TABLE IF NOT EXISTS audit_logs (
-    id BIGSERIAL PRIMARY KEY,
-    usuario_id INTEGER
-        REFERENCES funcionarios(id) ON DELETE SET NULL,
-    acao VARCHAR(100) NOT NULL,
-    entidade VARCHAR(100) NOT NULL,
-    entidade_id INTEGER,
-    detalhes TEXT,
-    criado_em TIMESTAMP NOT NULL DEFAULT NOW()
+CREATE SEQUENCE public.funcionarios_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: funcionarios_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.funcionarios_id_seq OWNED BY public.funcionarios.id;
+
+
+--
+-- Name: logs_maquinas; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.logs_maquinas (
+    id bigint NOT NULL,
+    horario_do_log timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    maquina_id integer,
+    turno integer,
+    vibracao_rms real,
+    corrente_ampere real,
+    tensao_volt real,
+    potencia_watt real,
+    status_no_momento character varying(20) NOT NULL,
+    frequencia_hz real DEFAULT 0,
+    CONSTRAINT logs_maquinas_turno_check CHECK ((turno = ANY (ARRAY[1, 2, 3])))
 );
 
-CREATE TABLE IF NOT EXISTS status_atual_maquinas (
-    momento_da_leitura TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    maquina_id INTEGER PRIMARY KEY
-        REFERENCES maquinas(id),
-    vibracao_rms REAL DEFAULT 0,
-    corrente_ampere REAL DEFAULT 0,
-    tensao_volt REAL DEFAULT 0,
-    potencia_watt REAL DEFAULT 0,
-    status_atual VARCHAR(20) DEFAULT 'Desligada'
-        CHECK (
-            status_atual IN (
-                'Ativa',
-                'Inativa',
-                'Desligada',
-                'Manutenção'
-            )
-        ),
-    frequencia_hz REAL DEFAULT 0
+
+--
+-- Name: logs_maquinas_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.logs_maquinas_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: logs_maquinas_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.logs_maquinas_id_seq OWNED BY public.logs_maquinas.id;
+
+
+--
+-- Name: manutencao_preventiva; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.manutencao_preventiva (
+    id integer NOT NULL,
+    maquina_id integer,
+    descricao_servico text,
+    data_agendada date NOT NULL,
+    concluida boolean DEFAULT false,
+    data_conclusao_real timestamp without time zone,
+    funcionario_id integer,
+    tipo_manutencao character varying(20) DEFAULT 'Preventiva'::character varying NOT NULL,
+    deletado_em timestamp without time zone,
+    CONSTRAINT check_tipo_manutencao CHECK (((tipo_manutencao)::text = ANY (ARRAY[('Preventiva'::character varying)::text, ('Preditiva'::character varying)::text])))
 );
 
-CREATE TABLE IF NOT EXISTS logs_maquinas (
-    id BIGSERIAL PRIMARY KEY,
-    horario_do_log TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    maquina_id INTEGER
-        REFERENCES maquinas(id),
-    turno INTEGER
-        CHECK (turno IN (1, 2, 3)),
-    vibracao_rms REAL,
-    corrente_ampere REAL,
-    tensao_volt REAL,
-    potencia_watt REAL,
-    status_no_momento VARCHAR(20) NOT NULL,
-    frequencia_hz REAL DEFAULT 0
+
+--
+-- Name: manutencao_preventiva_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.manutencao_preventiva_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: manutencao_preventiva_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.manutencao_preventiva_id_seq OWNED BY public.manutencao_preventiva.id;
+
+
+--
+-- Name: maquinas; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.maquinas (
+    id integer NOT NULL,
+    tag_maquina character varying(20) NOT NULL,
+    nome_maquina character varying(100) NOT NULL,
+    setor character varying(50),
+    data_cadastro timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    ultima_atualizacao timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    deletado_em timestamp without time zone
 );
 
-CREATE INDEX IF NOT EXISTS idx_logs_maquina_tempo
-ON logs_maquinas (maquina_id, horario_do_log DESC);
 
-CREATE TABLE IF NOT EXISTS manutencao_preventiva (
-    id SERIAL PRIMARY KEY,
-    maquina_id INTEGER
-        REFERENCES maquinas(id),
-    descricao_servico TEXT,
-    data_agendada DATE NOT NULL,
-    concluida BOOLEAN DEFAULT FALSE,
-    data_conclusao_real TIMESTAMP,
-    funcionario_id INTEGER
-        REFERENCES funcionarios(id) ON DELETE RESTRICT,
-    tipo_manutencao VARCHAR(20) NOT NULL DEFAULT 'Preventiva'
-        CHECK (
-            tipo_manutencao IN (
-                'Preventiva',
-                'Preditiva'
-            )
-        ),
-    deletado_em TIMESTAMP
-);
+--
+-- Name: maquinas_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
 
-CREATE INDEX IF NOT EXISTS idx_manutencoes_abertas
-ON manutencao_preventiva (data_agendada)
-WHERE concluida = FALSE;
+CREATE SEQUENCE public.maquinas_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: maquinas_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.maquinas_id_seq OWNED BY public.maquinas.id;
+
+
+--
+-- Name: status_atual_maquinas; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.status_atual_maquinas (
+    momento_da_leitura timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    maquina_id integer NOT NULL,
+    vibracao_rms real DEFAULT 0,
+    corrente_ampere real DEFAULT 0,
+    tensao_volt real DEFAULT 0,
+    potencia_watt real DEFAULT 0,
+    status_atual character varying(20) DEFAULT 'Desligada'::character varying,
+    frequencia_hz real DEFAULT 0,
+    CONSTRAINT status_atual_maquinas_status_atual_check CHECK (((status_atual)::text = ANY (ARRAY[('Ativa'::character varying)::text, ('Inativa'::character varying)::text, ('Desligada'::character varying)::text, ('Manutenção'::character varying)::text])))
+)
+WITH (fillfactor='80', autovacuum_vacuum_scale_factor='0.0', autovacuum_vacuum_threshold='50');
+
+
+--
+-- Name: audit_logs id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.audit_logs ALTER COLUMN id SET DEFAULT nextval('public.audit_logs_id_seq'::regclass);
+
+
+--
+-- Name: funcionarios id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.funcionarios ALTER COLUMN id SET DEFAULT nextval('public.funcionarios_id_seq'::regclass);
+
+
+--
+-- Name: logs_maquinas id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.logs_maquinas ALTER COLUMN id SET DEFAULT nextval('public.logs_maquinas_id_seq'::regclass);
+
+
+--
+-- Name: manutencao_preventiva id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.manutencao_preventiva ALTER COLUMN id SET DEFAULT nextval('public.manutencao_preventiva_id_seq'::regclass);
+
+
+--
+-- Name: maquinas id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.maquinas ALTER COLUMN id SET DEFAULT nextval('public.maquinas_id_seq'::regclass);
+
+
+--
+-- Name: audit_logs audit_logs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.audit_logs
+    ADD CONSTRAINT audit_logs_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: funcionarios funcionarios_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.funcionarios
+    ADD CONSTRAINT funcionarios_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: logs_maquinas logs_maquinas_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.logs_maquinas
+    ADD CONSTRAINT logs_maquinas_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: manutencao_preventiva manutencao_preventiva_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.manutencao_preventiva
+    ADD CONSTRAINT manutencao_preventiva_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: maquinas maquinas_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.maquinas
+    ADD CONSTRAINT maquinas_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: idx_maquinas_tag_maquina_ativa; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_maquinas_tag_maquina_ativa
+    ON public.maquinas (UPPER(tag_maquina))
+    WHERE deletado_em IS NULL;
+
+--
+-- Name: status_atual_maquinas status_atual_maquinas_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.status_atual_maquinas
+    ADD CONSTRAINT status_atual_maquinas_pkey PRIMARY KEY (maquina_id);
+
+
+--
+-- Name: idx_funcionarios_ativos; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_funcionarios_ativos ON public.funcionarios USING btree (id) WHERE (deletado_em IS NULL);
+
+
+--
+-- Name: idx_funcionarios_email_ativo; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_funcionarios_email_ativo ON public.funcionarios USING btree (lower((email)::text)) WHERE (deletado_em IS NULL);
+
+
+--
+-- Name: idx_logs_maquina_tempo; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_logs_maquina_tempo ON public.logs_maquinas USING btree (maquina_id, horario_do_log DESC);
+
+
+--
+-- Name: idx_manutencoes_abertas; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_manutencoes_abertas ON public.manutencao_preventiva USING btree (data_agendada) WHERE (concluida = false);
+
+
+--
+-- Name: audit_logs audit_logs_usuario_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.audit_logs
+    ADD CONSTRAINT audit_logs_usuario_id_fkey FOREIGN KEY (usuario_id) REFERENCES public.funcionarios(id) ON DELETE SET NULL;
+
+
+--
+-- Name: logs_maquinas logs_maquinas_maquina_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.logs_maquinas
+    ADD CONSTRAINT logs_maquinas_maquina_id_fkey FOREIGN KEY (maquina_id) REFERENCES public.maquinas(id);
+
+
+--
+-- Name: manutencao_preventiva manutencao_preventiva_funcionario_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.manutencao_preventiva
+    ADD CONSTRAINT manutencao_preventiva_funcionario_id_fkey FOREIGN KEY (funcionario_id) REFERENCES public.funcionarios(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: manutencao_preventiva manutencao_preventiva_maquina_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.manutencao_preventiva
+    ADD CONSTRAINT manutencao_preventiva_maquina_id_fkey FOREIGN KEY (maquina_id) REFERENCES public.maquinas(id);
+
+
+--
+-- Name: status_atual_maquinas status_atual_maquinas_maquina_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.status_atual_maquinas
+    ADD CONSTRAINT status_atual_maquinas_maquina_id_fkey FOREIGN KEY (maquina_id) REFERENCES public.maquinas(id);
+
+
+--
+-- PostgreSQL database dump complete
+--
+
+\unrestrict 4PJxnYOZlSKSf1oJyP83vyg40yc3IQ9lvnnOHUoUIDoATQdaNDP4uHTJonyWAf0
