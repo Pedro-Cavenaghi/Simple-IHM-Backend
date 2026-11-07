@@ -1,6 +1,6 @@
 from datetime import datetime
 from unittest.mock import AsyncMock
-
+import asyncpg
 import pytest
 
 import app.main as main_module
@@ -161,3 +161,99 @@ async def test_deletar_maquina_inexistente(client_admin, monkeypatch):
     response = await client_admin.delete("/maquinas/999")
 
     assert response.status_code == 404
+
+    
+@pytest.mark.asyncio
+async def test_cadastrar_maquina_sem_retorno(client_admin, monkeypatch):
+    monkeypatch.setattr(
+        main_module.repository,
+        "cadastrar_maquina",
+        AsyncMock(return_value=None),
+    )
+
+    response = await client_admin.post(
+        "/maquinas",
+        json={
+            "tag_maquina": "INJ-01",
+            "nome_maquina": "Injetora 01",
+            "setor": "Produção",
+        },
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Erro interno ao registrar a máquina."
+    )
+
+
+@pytest.mark.asyncio
+async def test_cadastrar_maquina_com_tag_duplicada(client_admin, monkeypatch):
+    monkeypatch.setattr(
+        main_module.repository,
+        "cadastrar_maquina",
+        AsyncMock(
+            side_effect=asyncpg.exceptions.UniqueViolationError(
+                "TAG duplicada"
+            )
+        ),
+    )
+
+    response = await client_admin.post(
+        "/maquinas",
+        json={
+            "tag_maquina": "INJ-01",
+            "nome_maquina": "Injetora 01",
+            "setor": "Produção",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "INJ-01" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_atualizar_maquina_sem_sucesso(client_admin, monkeypatch):
+    monkeypatch.setattr(
+        main_module.repository,
+        "atualizar_maquina",
+        AsyncMock(return_value=False),
+    )
+
+    response = await client_admin.put(
+        "/maquinas/1",
+        json={
+            "tag_maquina": "INJ-02",
+            "nome_maquina": "Injetora Atualizada",
+            "setor": "Montagem",
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == (
+        "Máquina não encontrada ou desativada do sistema."
+    )
+
+
+@pytest.mark.asyncio
+async def test_atualizar_maquina_com_tag_duplicada(client_admin, monkeypatch):
+    monkeypatch.setattr(
+        main_module.repository,
+        "atualizar_maquina",
+        AsyncMock(
+            side_effect=asyncpg.exceptions.UniqueViolationError(
+                "TAG duplicada"
+            )
+        ),
+    )
+
+    response = await client_admin.put(
+        "/maquinas/1",
+        json={
+            "tag_maquina": "INJ-02",
+            "nome_maquina": "Injetora Atualizada",
+            "setor": "Montagem",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "INJ-02" in response.json()["detail"]
