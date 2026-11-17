@@ -121,3 +121,31 @@ def test_cenario_nao_altera_os_parametros_originais():
     CENARIOS["sobrecarga"].aplicar(base, 15)
 
     assert base == Parametros()
+
+
+@pytest.mark.parametrize("chave", list(CENARIOS))
+def test_intensidade_maior_produz_efeito_maior(chave):
+    cenario = CENARIOS[chave]
+    base = perfil_padrao("CNC-01")
+    # Desgaste cresce até o fim; os outros têm o pico no meio
+    fator = 0.9 if chave == "desgaste_rolamento" else 0.5
+    t = cenario.duracao_s * fator
+
+    def desvio(intensidade):
+        p = cenario.aplicar(base, t, intensidade=intensidade)
+        return sum(
+            abs(getattr(p, campo) - getattr(base, campo)) / getattr(base, campo)
+            for campo in ("tensao_volt", "corrente_ampere", "vibracao_rms")
+        )
+
+    assert desvio(0.5) < desvio(1.0) < desvio(1.5)
+
+
+def test_duracao_personalizada_acelera_o_desgaste():
+    cenario = CENARIOS["desgaste_rolamento"]
+    base = Parametros(vibracao_rms=2.0)
+
+    rapido = cenario.aplicar(base, 60, duracao_s=120).vibracao_rms
+    padrao = cenario.aplicar(base, 60).vibracao_rms
+
+    assert rapido > padrao

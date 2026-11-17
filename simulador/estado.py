@@ -6,9 +6,10 @@ import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 
 from simulador.cliente_api import ClienteAPI, ResultadoEnvio
+from simulador.coleta import ColetaAutomatica
 from simulador.fisica import (
     CENARIOS,
     STATUS_MANUTENCAO,
@@ -25,6 +26,22 @@ PESOS_AUTOMATICO = {"Ativa": 90, "Inativa": 8, "Desligada": 2}
 DURACAO_AUTOMATICO = {"Ativa": (60, 240), "Inativa": (10, 40), "Desligada": (20, 60)}
 
 
+@dataclass(frozen=True)
+class CenarioAtivo:
+    """Uma falha em andamento: qual, quando começou, quanto dura e quão forte é."""
+
+    chave: str
+    inicio: float
+    duracao_s: float
+    intensidade: float = 1.0
+
+    def progresso(self, agora: float) -> float:
+        return min(1.0, max(0.0, (agora - self.inicio) / self.duracao_s))
+
+    def terminou(self, agora: float) -> bool:
+        return agora - self.inicio >= self.duracao_s
+
+
 @dataclass
 class EstadoMaquina:
     id: int
@@ -37,8 +54,7 @@ class EstadoMaquina:
     ruido: bool = True
     enviando: bool = True
     em_manutencao: bool = False  # vem da API (ordem aberta para hoje)
-    cenario: str | None = None
-    cenario_inicio: float = 0.0
+    cenario_ativo: CenarioAtivo | None = None
     ultima_leitura: dict | None = None
     ultimo_resultado: ResultadoEnvio | None = None
     historico: deque = field(default_factory=lambda: deque(maxlen=TAMANHO_HISTORICO))
@@ -58,37 +74,46 @@ class EstadoMaquina:
 
     # ---------- cenários ----------
 
-    def iniciar_cenario(self, chave: str, agora: float) -> None:
+    @property
+    def cenario(self) -> str | None:
+        return self.cenario_ativo.chave if self.cenario_ativo else None
+
+    def iniciar_cenario(
+        self,
+        chave: str,
+        agora: float,
+        duracao_s: float | None = None,
+        intensidade: float = 1.0,
+    ) -> None:
         if chave not in CENARIOS:
             raise ValueError(f"Cenário desconhecido: {chave}")
-        self.cenario = chave
-        self.cenario_inicio = agora
+        self.cenario_ativo = CenarioAtivo(
+            chave=chave,
+            inicio=agora,
+            duracao_s=duracao_s or CENARIOS[chave].duracao_s,
+            intensidade=intensidade,
+        )
 
     def encerrar_cenario(self) -> None:
-        self.cenario = None
+        self.cenario_ativo = None
 
     def atualizar_cenario(self, agora: float) -> None:
         """Encerra o cenário quando a duração termina."""
-        if (
-            self.cenario
-            and agora - self.cenario_inicio >= CENARIOS[self.cenario].duracao_s
-        ):
-            self.cenario = None
+        if self.cenario_ativo and self.cenario_ativo.terminou(agora):
+            self.cenario_ativo = None
 
     def progresso_cenario(self, agora: float) -> float:
-        if not self.cenario:
-            return 0.0
-        duracao = CENARIOS[self.cenario].duracao_s
-        return min(1.0, max(0.0, (agora - self.cenario_inicio) / duracao))
+        return self.cenario_ativo.progresso(agora) if self.cenario_ativo else 0.0
 
     # ---------- valores efetivos ----------
 
     def parametros_efetivos(self, agora: float) -> Parametros:
         self.atualizar_cenario(agora)
-        if not self.cenario:
+        c = self.cenario_ativo
+        if not c:
             return self.parametros
-        return CENARIOS[self.cenario].aplicar(
-            self.parametros, agora - self.cenario_inicio
+        return CENARIOS[c.chave].aplicar(
+            self.parametros, agora - c.inicio, c.duracao_s, c.intensidade
         )
 
     def status_efetivo(self, agora: float, rng: random.Random) -> str:
@@ -132,6 +157,7 @@ class Simulador:
         rng: random.Random | None = None,
         relogio: Callable[[], float] = time.monotonic,
         enviar_por_padrao: bool = True,
+        relogio_parede: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ):
         self.cliente = cliente
         self.gravador = gravador
@@ -139,6 +165,9 @@ class Simulador:
         self.intervalo_sincronizacao_s = intervalo_sincronizacao_s
         self.rng = rng or random.Random()
         self.relogio = relogio
+        # Data e hora gravadas no CSV (o gerador offline usa um relógio simulado)
+        self.relogio_parede = relogio_parede
+        self.coleta = ColetaAutomatica(self.rng)
         self.maquinas: dict[int, EstadoMaquina] = {}
         self.ultima_sincronizacao: float | None = None
         # Vale para as máquinas que ainda vão aparecer na sincronização
@@ -183,17 +212,23 @@ class Simulador:
 
         maquina.ultima_leitura = leitura
         maquina.ultimo_resultado = resultado
+        momento = self.relogio_parede()
         maquina.historico.append(
-            {"hora": datetime.now().strftime("%H:%M:%S"), **leitura}
+            {"hora": momento.astimezone().strftime("%H:%M:%S"), **leitura}
         )
 
         if self.gravador:
+            ativo = maquina.cenario_ativo
             self.gravador.registrar(
                 leitura,
                 tag_maquina=maquina.tag,
                 cenario=maquina.rotulo(),
                 parametros_alterados=maquina.parametros_alterados,
                 resultado_envio=resultado.value,
+                momento=momento,
+                sessao=self.coleta.sessao if self.coleta.ativa else "manual",
+                intensidade=ativo.intensidade if ativo else 0.0,
+                cenario_progresso=ativo.progresso(agora) if ativo else 0.0,
             )
         return resultado
 
@@ -201,7 +236,25 @@ class Simulador:
     def todas_pausadas(self) -> bool:
         return not any(m.enviando for m in self.maquinas.values())
 
+    def iniciar_coleta(self, sessao: str | None = None) -> None:
+        """Prepara as máquinas e liga o disparo automático de falhas.
+
+        Todas ficam Ativas, sem modo automático e com ruído, para que o rótulo
+        de cada leitura descreva só a falha injetada.
+        """
+        for m in self.maquinas.values():
+            m.status = "Ativa"
+            m.modo_automatico = False
+            m.ruido = True
+            m.encerrar_cenario()
+        self.retomar_todas()
+        self.coleta.iniciar(self.relogio(), sessao)
+
+    def parar_coleta(self) -> None:
+        self.coleta.parar()
+
     def pausar_todas(self) -> None:
+        self.coleta.parar()
         self.enviar_por_padrao = False
         for m in self.maquinas.values():
             m.enviando = False
@@ -227,6 +280,7 @@ class Simulador:
         )
 
     async def ciclo(self) -> None:
+        self.coleta.passo(self.maquinas.values(), self.relogio())
         ativas = [m for m in self.maquinas.values() if m.enviando]
         if ativas:
             await asyncio.gather(*(self.enviar_maquina(m) for m in ativas))

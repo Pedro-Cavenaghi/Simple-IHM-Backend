@@ -22,9 +22,10 @@ from simulador.fisica import (
 from simulador.rotulos import GravadorRotulos
 
 cliente = ClienteAPI(config.API_BASE_URL, config.API_KEY)
+gravador = GravadorRotulos(config.ARQUIVO_ROTULOS)
 simulador = Simulador(
     cliente,
-    GravadorRotulos(config.ARQUIVO_ROTULOS),
+    gravador,
     intervalo_envio_s=config.INTERVALO_ENVIO_S,
     intervalo_sincronizacao_s=config.INTERVALO_SINCRONIZACAO_S,
     enviar_por_padrao=not config.INICIAR_PAUSADO,
@@ -37,6 +38,7 @@ async def _iniciar() -> None:
 
 async def _encerrar() -> None:
     await cliente.fechar()
+    gravador.fechar()
 
 
 app.on_startup(_iniciar)
@@ -70,6 +72,7 @@ ICONE_RESULTADO = {
         "API fora do ar: leitura guardada no buffer",
     ),
     ResultadoEnvio.REJEITADO: ("error", "text-red-400", "A API recusou a leitura"),
+    ResultadoEnvio.GERADO_OFFLINE: ("science", "text-slate-400", "Leitura não enviada"),
 }
 
 
@@ -267,11 +270,14 @@ def _card_maquina(m: EstadoMaquina):
             dica_resultado.text = dica
 
         linha_cenario.set_visibility(m.cenario is not None)
-        if m.cenario:
-            cenario = CENARIOS[m.cenario]
-            restante = cenario.duracao_s * (1 - m.progresso_cenario(agora))
-            rotulo_cenario.text = f"⚠ {cenario.nome} · {restante:.0f}s"
-            barra_cenario.value = m.progresso_cenario(agora)
+        if m.cenario_ativo:
+            ativo = m.cenario_ativo
+            restante = ativo.duracao_s * (1 - ativo.progresso(agora))
+            rotulo_cenario.text = (
+                f"⚠ {CENARIOS[ativo.chave].nome} ×{ativo.intensidade:.1f} · "
+                f"{restante:.0f}s"
+            )
+            barra_cenario.value = ativo.progresso(agora)
 
         if m.historico and m.historico[-1]["hora"] != ultimo_ponto["hora"]:
             ultimo_ponto["hora"] = m.historico[-1]["hora"]
@@ -306,6 +312,17 @@ def painel():
             ui.notify("Máquinas sincronizadas com a API", type="positive")
         else:
             ui.notify(cliente.ultimo_erro or "Falha ao sincronizar", type="negative")
+
+    def iniciar_coleta() -> None:
+        simulador.iniciar_coleta()
+        ui.notify(
+            "Coleta automática iniciada: falhas variadas serão disparadas sozinhas",
+            type="positive",
+        )
+
+    def parar_coleta() -> None:
+        simulador.parar_coleta()
+        ui.notify("Coleta automática encerrada (o envio continua)", type="info")
 
     def pausar_todas() -> None:
         simulador.pausar_todas()
@@ -349,6 +366,9 @@ def painel():
         chip_api = ui.badge("API: aguardando").classes("px-2 py-1")
         rotulo_buffer = ui.label().classes("text-xs text-amber-300")
         chip_pausado = ui.badge("⏸ Envio pausado", color="warning").classes("px-2 py-1")
+        chip_coleta = ui.badge(color="secondary").classes("px-2 py-1 text-slate-900")
+        with chip_coleta:
+            ui.tooltip("Sessão da coleta automática · falhas disparadas · duração")
         with ui.button(icon="more_vert").props("flat round color=white"):
             with ui.menu():
                 ui.menu_item("Sincronizar máquinas", on_click=sincronizar)
@@ -357,6 +377,11 @@ def painel():
                 ui.menu_item("Desligar todas", on_click=desligar_todas).tooltip(
                     "Envia 'Desligada' de cada máquina e pausa o envio"
                 )
+                ui.separator()
+                ui.menu_item(
+                    "Iniciar coleta automática", on_click=iniciar_coleta
+                ).tooltip("Dispara falhas de tipo, intensidade e duração sorteados")
+                ui.menu_item("Parar coleta automática", on_click=parar_coleta)
                 ui.separator()
                 ui.menu_item("Baixar rótulos (CSV)", on_click=baixar_rotulos)
 
@@ -394,6 +419,15 @@ def painel():
         else:
             chip_api.text, cor = "API: offline", "negative"
         chip_api.props(f"color={cor}")
+
+        coleta = simulador.coleta
+        chip_coleta.set_visibility(coleta.ativa)
+        if coleta.ativa:
+            decorrido = int(time.monotonic() - coleta.inicio)
+            chip_coleta.text = (
+                f"🧪 {coleta.sessao} · {coleta.falhas_disparadas} falhas · "
+                f"{decorrido // 3600:02d}:{decorrido % 3600 // 60:02d}:{decorrido % 60:02d}"
+            )
 
         chip_pausado.set_visibility(
             bool(simulador.maquinas) and simulador.todas_pausadas

@@ -73,25 +73,38 @@ class Cenario:
     nome: str
     descricao: str
     icone: str
-    duracao_s: float
+    duracao_s: float  # duração padrão, usada pelos botões do painel
 
-    def aplicar(self, p: Parametros, t: float) -> Parametros:
-        """Retorna os parâmetros alterados pela falha, `t` segundos após o início."""
-        return _EFEITOS[self.chave](p, t, self.duracao_s)
+    def aplicar(
+        self,
+        p: Parametros,
+        t: float,
+        duracao_s: float | None = None,
+        intensidade: float = 1.0,
+    ) -> Parametros:
+        """Retorna os parâmetros alterados pela falha, `t` segundos após o início.
+
+        `intensidade` escala o tamanho do efeito (1.0 = efeito padrão) e
+        `duracao_s` permite falhas mais rápidas ou mais lentas que o padrão.
+        """
+        duracao = duracao_s if duracao_s is not None else self.duracao_s
+        return _EFEITOS[self.chave](p, t, duracao, intensidade)
 
 
-def _desgaste_rolamento(p: Parametros, t: float, duracao: float) -> Parametros:
+def _desgaste_rolamento(
+    p: Parametros, t: float, duracao: float, k: float
+) -> Parametros:
     # Deriva lenta e acelerada: o caso clássico que a manutenção preditiva deve detectar cedo
     progresso = min(1.0, max(0.0, t / duracao))
     return replace(
         p,
-        vibracao_rms=p.vibracao_rms * (1 + 2.5 * progresso**1.5),
-        corrente_ampere=p.corrente_ampere * (1 + 0.10 * progresso),
+        vibracao_rms=p.vibracao_rms * (1 + 2.5 * k * progresso**1.5),
+        corrente_ampere=p.corrente_ampere * (1 + 0.10 * k * progresso),
     )
 
 
-def _sobrecarga(p: Parametros, t: float, duracao: float) -> Parametros:
-    intensidade = envelope(t, duracao, rampa=3)
+def _sobrecarga(p: Parametros, t: float, duracao: float, k: float) -> Parametros:
+    intensidade = k * envelope(t, duracao, rampa=3)
     return replace(
         p,
         corrente_ampere=p.corrente_ampere * (1 + 0.40 * intensidade),
@@ -100,19 +113,19 @@ def _sobrecarga(p: Parametros, t: float, duracao: float) -> Parametros:
     )
 
 
-def _queda_tensao(p: Parametros, t: float, duracao: float) -> Parametros:
+def _queda_tensao(p: Parametros, t: float, duracao: float, k: float) -> Parametros:
     intensidade = envelope(t, duracao, rampa=2)
-    alvo = 190.0
+    queda = 30.0 * k  # 220 V -> 190 V com intensidade 1
     return replace(
         p,
-        tensao_volt=p.tensao_volt - (p.tensao_volt - alvo) * intensidade,
+        tensao_volt=p.tensao_volt - queda * intensidade,
         # O motor puxa mais corrente para manter a potência mecânica
-        corrente_ampere=p.corrente_ampere * (1 + 0.12 * intensidade),
+        corrente_ampere=p.corrente_ampere * (1 + 0.12 * k * intensidade),
     )
 
 
-def _desbalanceamento(p: Parametros, t: float, duracao: float) -> Parametros:
-    intensidade = envelope(t, duracao, rampa=10)
+def _desbalanceamento(p: Parametros, t: float, duracao: float, k: float) -> Parametros:
+    intensidade = k * envelope(t, duracao, rampa=10)
     oscilacao = 0.6 + 0.6 * math.sin(2 * math.pi * t / 6)
     return replace(
         p,
