@@ -1,52 +1,441 @@
-# Simple IHM - API de Telemetria Industrial (Backend)
+<div align="center">
 
-🚀 **Link da API em Produção:** [Acesse aqui no Railway]( https://simple-ihm-api-production.up.railway.app/docs )
+# ⚙️ Simple IHM — Backend
 
-O **Simple IHM** é um ecossistema IoT projetado para monitoramento de telemetria de máquinas industriais em tempo real. O objetivo principal do projeto é aplicar os conceitos de **Manutenção Preditiva e Corretiva** em um ambiente de chão de fábrica, traduzindo dados complexos de sensores em uma interface visual simples, direta e de baixa carga cognitiva para os operadores.
+### API de Telemetria Industrial em Tempo Real
 
-Este repositório contém estritamente a **Central Backend** do ecossistema, responsável pela recepção concorrente de dados, validação estrita e persistência analítica. O Frontend em React foi desenvolvido em paralelo e integrado através do consumo desta API.
+*Ecossistema IoT para monitoramento de máquinas, manutenção preventiva/preditiva e controle de acesso por perfil.*
 
----
+[![Backend Pipeline](https://github.com/Pedro-Cavenaghi/Simple-IHM-Backend/actions/workflows/pipeline.yml/badge.svg)](https://github.com/Pedro-Cavenaghi/Simple-IHM-Backend/actions/workflows/pipeline.yml)
+![Python](https://img.shields.io/badge/Python-3.13-3776AB?style=flat&logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.136-009688?style=flat&logo=fastapi&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-18-4169E1?style=flat&logo=postgresql&logoColor=white)
+![WebSocket](https://img.shields.io/badge/WebSocket-tempo%20real-8A2BE2?style=flat)
+![Docker](https://img.shields.io/badge/Docker-ready-2496ED?style=flat&logo=docker&logoColor=white)
+![Railway](https://img.shields.io/badge/Deploy-Railway-0B0D0E?style=flat&logo=railway&logoColor=white)
 
-## 🛠️ Tecnologias Utilizadas
+[**📖 Documentação da API (Swagger)**](https://simple-ihm-api-production.up.railway.app/docs) &nbsp;•&nbsp; [**🖥️ Repositório do Frontend**](https://github.com/SamukaSantos-DEV/Simple-IHM-Frontend)
 
-*   **Linguagem:** Python 3.13+
-*   **Framework Web:** FastAPI (Arquitetura assíncrona)
-*   **Banco de Dados:** PostgreSQL (Modelo Relacional de Alta Performance)
-*   **Validação de Dados:** Pydantic
-*   **ORM / Query Builder:** SQLAlchemy / Asyncpg
-*   **Ambiente de Nuvem:** Railway
+<br>
 
----
+<img src="docs/images/dashboard.png" alt="Dashboard inicial do Simple IHM" width="900">
 
-## 📐 Diferenciais de Arquitetura e Engenharia de Software
+<sub>Dashboard de monitoramento do frontend React, alimentado em tempo real por esta API.</sub>
 
-O backend foi projetado para suportar o fluxo contínuo de dados gerados por microcontroladores (ESP32) simulando o chão de fábrica a cada 2 segundos. Para garantir a estabilidade, foram aplicados os seguintes padrões:
-
-1.  **Desempenho Assíncrono Nativo (`async/await`):** Utilização do motor assíncrono do FastAPI sobre Uvicorn para gerenciar múltiplas requisições concorrentes dos sensores sem bloqueio de threads ou travamento do servidor.
-2.  **Validação na Porta de Entrada (Pydantic):** Garantia de integridade dos dados coletados no hardware. Qualquer leitura mal formatada é rejeitada antes de atingir o banco de dados.
-3.  **Persistência Otmizada com Séries Temporais:** Modelagem do PostgreSQL focada em logs históricos (`logs_maquinas`). Implementação de operações atômicas de *Upsert* (`ON CONFLICT`) para atualizar estados em tempo real e registrar o histórico com baixa latência, poupando recursos de CPU.
-4.  **Integridade Relacional Estrita:** Uso rigoroso de restrições de banco (Constraints, Primary Keys e Foreign Keys com `ON DELETE CASCADE`) para impedir dados órfãos e garantir consistência absoluta.
+</div>
 
 ---
 
-## 🛣️ Principais Endpoints da API
+## 📋 Sumário
 
-*   `POST /maquinas` - Cadastro de novos ativos industriais (Tags, Setor, Nome).
-*   `GET /maquinas` - Listagem e status em tempo real de todas as máquinas da planta.
-*   `POST /telemetria` - Endpoint de alta frequência consumido pelo hardware para envio de Corrente (A) e Vibração (RMS).
-*   `GET /telemetria/historico/{maquina_id}` - Retorna a série temporal de dados para plotagem de gráficos analíticos de manutenção preditiva.
+- [Sobre o projeto](#-sobre-o-projeto)
+- [Arquitetura](#️-arquitetura)
+- [Tecnologias](#️-tecnologias)
+- [Segurança e perfis de acesso](#-segurança-e-perfis-de-acesso)
+- [Endpoints](#️-endpoints)
+- [Tempo real com WebSocket](#-tempo-real-com-websocket)
+- [Banco de dados](#️-banco-de-dados)
+- [Como executar](#-como-executar)
+- [Testes e CI](#-testes-e-ci)
+- [Estrutura do projeto](#-estrutura-do-projeto)
+- [Equipe](#-equipe)
 
-*(A documentação interativa completa e gerada automaticamente pode ser acessada via:
-https://simple-ihm-api-production.up.railway.app/docs )*
+---
+
+## 💡 Sobre o projeto
+
+O **Simple IHM** (*Interface Homem-Máquina*) é um ecossistema IoT para monitorar máquinas industriais em tempo real. Ele aplica conceitos de **manutenção preventiva e preditiva** no chão de fábrica e transforma leituras de sensores em uma interface simples, direta e de baixa carga cognitiva para operadores.
+
+Este repositório contém a **central backend**, responsável por:
+
+- 📡 **Receber telemetria** de microcontroladores ESP32 (corrente, tensão, potência, vibração e frequência);
+- ✅ **Validar** cada leitura antes de qualquer gravação;
+- 🗄️ **Persistir** o histórico e o estado atual de cada máquina no PostgreSQL;
+- ⚡ **Transmitir** as leituras via WebSocket para o dashboard assim que chegam;
+- 🔐 **Autenticar** usuários com JWT e **autorizar** cada ação por perfil (RBAC);
+- 🧾 **Auditar** logins e alterações feitas no sistema;
+- 🛠️ **Gerenciar** máquinas, funcionários e ordens de manutenção.
+
+O **frontend em React** fica no repositório [Simple-IHM-Frontend](https://github.com/SamukaSantos-DEV/Simple-IHM-Frontend) e consome esta API. Os dois serviços estão hospedados no **Railway**.
 
 ---
 
-## 👥 Desenvolvimento e Divisão do Projeto
+## 🏗️ Arquitetura
 
-O projeto foi construído em equipe, simulando o ambiente real de desenvolvimento de software:
-*   **Backend & Banco de Dados (Este repositório):** Desenvolvido por [Pedro Henrique Cavenaghi](https://github.com/Pedro-Cavenaghi), com foco em engenharia de dados, regras de negócio e infraestrutura assíncrona.
-*   **Frontend & Dashboard (React):** Desenvolvido em repositório paralelo, focado na experiência do usuário (UX) industrial e renderização dos gráficos em tempo real.
+```mermaid
+flowchart LR
+    subgraph Fabrica["🏭 Chão de fábrica"]
+        ESP["ESP32 / Simulador<br/>(leitura a cada 2s)"]
+    end
+
+    subgraph Railway["☁️ Railway"]
+        API["⚙️ FastAPI<br/>(Uvicorn + asyncpg)"]
+        DB[("🐘 PostgreSQL")]
+        FE["🖥️ Frontend React"]
+    end
+
+    ESP -- "POST /enviar-dados<br/>X-API-Key" --> API
+    API -- "INSERT log + UPSERT status<br/>(transação)" --> DB
+    API -- "broadcast WebSocket" --> FE
+    FE -- "REST + JWT Bearer" --> API
+```
+
+**Fluxo de uma leitura de sensor:**
+
+1. A ESP32 envia a leitura para `POST /enviar-dados` com o header `X-API-Key`.
+2. O **Pydantic** valida os limites físicos (ex.: tensão entre 0 e 250 V, frequência entre 0 e 100 Hz, nenhum valor negativo).
+3. Em uma **única transação**, a API grava o registro histórico em `logs_maquinas` e atualiza o estado atual em `status_atual_maquinas` com um *upsert* (`ON CONFLICT`). O turno (1, 2 ou 3) é calculado automaticamente pelo horário.
+4. A leitura é enviada via **WebSocket** para todos os dashboards conectados àquela máquina.
 
 ---
-*Projeto acadêmico*
+
+## 🛠️ Tecnologias
+
+| Camada | Tecnologia |
+|---|---|
+| **Linguagem** | Python 3.13 |
+| **Framework web** | FastAPI + Uvicorn (assíncrono) |
+| **Banco de dados** | PostgreSQL 18 |
+| **Driver** | asyncpg com pool de conexões (2 a 10) |
+| **Validação** | Pydantic v2 + pydantic-settings |
+| **Autenticação** | JWT (python-jose) + bcrypt (passlib) |
+| **Tempo real** | WebSockets nativos do FastAPI |
+| **Qualidade** | Ruff (lint + format), pytest, pytest-asyncio, pytest-cov |
+| **Infraestrutura** | Docker, Docker Compose, GitHub Actions, Railway |
+
+---
+
+## 🔐 Segurança e perfis de acesso
+
+A API usa **dois mecanismos de autenticação**, um para máquinas e outro para pessoas:
+
+| Quem | Mecanismo | Onde |
+|---|---|---|
+| 🤖 ESP32 / simulador | Header `X-API-Key` | `POST /enviar-dados` |
+| 👤 Usuários | `Authorization: Bearer <JWT>` (validade de 8 h) | Todas as rotas REST protegidas |
+| 🖥️ Dashboard | `?token=<JWT>` no handshake | Rotas WebSocket |
+
+O JWT carrega o ID, o e-mail e o **perfil** do usuário. Cada rota declara quais perfis podem acessá-la:
+
+| Recurso | 👑 ADMIN | 🧑‍🏭 OPERADOR | 🔧 MANUTENCAO |
+|---|:---:|:---:|:---:|
+| Status e histórico das máquinas | ✅ | ✅ | ✅ |
+| Consultar máquinas | ✅ | ✅ | ✅ |
+| Criar, editar e excluir máquinas | ✅ | ❌ | ❌ |
+| Plano de manutenção | ✅ | ❌ | ✅ |
+| Gestão de funcionários | ✅ | ❌ | ❌ |
+| Trilha de auditoria | ✅ | ❌ | ❌ |
+
+Outras práticas adotadas:
+
+- 🔑 Senhas armazenadas com **hash bcrypt**;
+- 🧾 **Auditoria** de logins (sucesso e falha) e de criações, edições e exclusões;
+- 🗑️ **Soft delete** em máquinas, funcionários e manutenções (`deletado_em`), preservando o histórico;
+- 📧 E-mail e tag de máquina **únicos sem diferenciar maiúsculas** (índices parciais sobre registros ativos).
+
+---
+
+## 🛣️ Endpoints
+
+> A documentação interativa completa está disponível em [**/docs**](https://simple-ihm-api-production.up.railway.app/docs).
+
+<details open>
+<summary><b>🔑 Autenticação</b></summary>
+
+| Método | Rota | Descrição |
+|---|---|---|
+| `POST` | `/login` | Autentica por e-mail e senha e devolve o JWT com os dados do usuário |
+
+</details>
+
+<details>
+<summary><b>📡 Telemetria IoT</b></summary>
+
+| Método | Rota | Acesso | Descrição |
+|---|---|---|---|
+| `POST` | `/enviar-dados` | API Key | Recebe a leitura dos sensores, grava e transmite em tempo real |
+| `GET` | `/status-maquinas` | Todos | Estado atual de todas as máquinas |
+| `GET` | `/status-maquinas/{maquina_id}` | Todos | Estado atual de uma máquina |
+| `GET` | `/logs` | Todos | Histórico filtrável por máquina e período (`hoje`, `semana`, `mes`, `customizado`) |
+
+</details>
+
+<details>
+<summary><b>🏭 Máquinas</b></summary>
+
+| Método | Rota | Acesso | Descrição |
+|---|---|---|---|
+| `GET` | `/maquinas` | Todos | Lista as máquinas ativas |
+| `GET` | `/maquinas/{maquina_id}` | Todos | Detalhes de uma máquina |
+| `POST` | `/maquinas` | ADMIN | Cadastra uma máquina (tag, nome, setor) |
+| `PUT` | `/maquinas/{maquina_id}` | ADMIN | Atualiza uma máquina |
+| `DELETE` | `/maquinas/{maquina_id}` | ADMIN | Desativa uma máquina (soft delete) |
+
+</details>
+
+<details>
+<summary><b>🔧 Plano de manutenção</b></summary>
+
+| Método | Rota | Acesso | Descrição |
+|---|---|---|---|
+| `GET` | `/manutencoes` | ADMIN, MANUTENCAO | Lista as ordens com dados da máquina e do técnico |
+| `GET` | `/manutencoes/{manutencao_id}` | ADMIN, MANUTENCAO | Detalhes de uma ordem |
+| `POST` | `/manutencoes` | ADMIN, MANUTENCAO | Agenda uma manutenção `Preventiva` ou `Preditiva` |
+| `PUT` | `/manutencoes/{manutencao_id}` | ADMIN, MANUTENCAO | Atualiza uma ordem |
+| `PATCH` | `/manutencoes/{manutencao_id}/concluir` | ADMIN, MANUTENCAO | Conclui a ordem e registra o técnico responsável |
+| `DELETE` | `/manutencoes/{manutencao_id}` | ADMIN, MANUTENCAO | Remove uma ordem (soft delete) |
+
+</details>
+
+<details>
+<summary><b>👥 Funcionários</b></summary>
+
+| Método | Rota | Acesso | Descrição |
+|---|---|---|---|
+| `GET` | `/funcionarios` | ADMIN | Lista os funcionários ativos |
+| `GET` | `/funcionarios/{funcionario_id}` | ADMIN | Detalhes de um funcionário |
+| `POST` | `/funcionarios` | ADMIN | Cadastra um funcionário com perfil e turno |
+| `PUT` | `/funcionarios/{funcionario_id}` | ADMIN | Atualiza um funcionário |
+| `DELETE` | `/funcionarios/{funcionario_id}` | ADMIN | Desativa um funcionário (soft delete) |
+
+</details>
+
+<details>
+<summary><b>🧾 Auditoria</b></summary>
+
+| Método | Rota | Acesso | Descrição |
+|---|---|---|---|
+| `GET` | `/auditoria` | ADMIN | Trilha de auditoria, filtrável por usuário (somente leitura) |
+
+</details>
+
+**Exemplo de leitura enviada pela ESP32:**
+
+```http
+POST /enviar-dados
+X-API-Key: <sua-api-key>
+Content-Type: application/json
+
+{
+  "maquina_id": 1,
+  "status_atual": "Ativa",
+  "corrente_ampere": 16.43,
+  "tensao_volt": 216.4,
+  "potencia_watt": 3023.0,
+  "vibracao_rms": 1.90,
+  "frequencia_hz": 60.0
+}
+```
+
+---
+
+## ⚡ Tempo real com WebSocket
+
+| Rota | Recebe |
+|---|---|
+| `ws://<host>/ws/telemetria/{maquina_id}?token=<JWT>` | Leituras de uma máquina específica |
+| `ws://<host>/ws/telemetria?token=<JWT>` | Leituras de todas as máquinas |
+
+O token é validado no handshake. Conexões sem token válido são fechadas com o código `1008` (*policy violation*). Conexões que caem são removidas automaticamente do gerenciador durante o broadcast.
+
+---
+
+## 🗄️ Banco de dados
+
+```mermaid
+erDiagram
+    maquinas ||--o| status_atual_maquinas : "estado atual"
+    maquinas ||--o{ logs_maquinas : "histórico"
+    maquinas ||--o{ manutencao_preventiva : "recebe"
+    funcionarios ||--o{ manutencao_preventiva : "executa"
+    funcionarios ||--o{ audit_logs : "gera"
+
+    maquinas {
+        int id PK
+        varchar tag_maquina
+        varchar nome_maquina
+        varchar setor
+        timestamp deletado_em
+    }
+    status_atual_maquinas {
+        int maquina_id PK
+        varchar status_atual
+        real corrente_ampere
+        real tensao_volt
+        real potencia_watt
+        real vibracao_rms
+        real frequencia_hz
+    }
+    logs_maquinas {
+        bigint id PK
+        int maquina_id FK
+        int turno
+        varchar status_no_momento
+        timestamp horario_do_log
+    }
+    manutencao_preventiva {
+        int id PK
+        int maquina_id FK
+        int funcionario_id FK
+        varchar tipo_manutencao
+        date data_agendada
+        bool concluida
+    }
+    funcionarios {
+        int id PK
+        varchar email
+        varchar perfil
+        int turno_trabalho
+        timestamp deletado_em
+    }
+    audit_logs {
+        int id PK
+        int usuario_id FK
+        varchar acao
+        varchar entidade
+        timestamptz criado_em
+    }
+```
+
+Destaques da modelagem (`database/schema.sql`):
+
+- **`status_atual_maquinas`** guarda uma linha por máquina, atualizada por *upsert* e configurada com `fillfactor=80` e autovacuum agressivo para suportar escritas constantes;
+- **`logs_maquinas`** é a série temporal, indexada por `(maquina_id, horario_do_log DESC)` para consultas rápidas de histórico;
+- **Constraints `CHECK`** garantem domínios válidos (status, turno, perfil e tipo de manutenção);
+- **Índices parciais** aceleram consultas de manutenções abertas e de registros ativos.
+
+---
+
+## 🚀 Como executar
+
+### Pré-requisitos
+
+- Python 3.13+ ou Docker
+- PostgreSQL (local ou via Docker)
+
+### Variáveis de ambiente
+
+Crie um arquivo `.env` na raiz:
+
+```env
+# Opção 1: URL completa (usada no Railway)
+DATABASE_URL=postgresql://usuario:senha@host:5432/monitoramento_industrial
+
+# Opção 2: credenciais separadas (usadas quando DATABASE_URL não existe)
+DB_USER=usuario
+DB_PASSWORD=senha
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=monitoramento_industrial
+
+# Segurança (defina valores próprios em produção)
+SECRET_KEY=troque-por-uma-chave-forte
+API_KEY=troque-pela-chave-da-esp32
+```
+
+### 🐳 Com Docker Compose
+
+```bash
+docker compose up --build
+```
+
+Sobe o PostgreSQL 18 e a API em `http://localhost:8000`.
+
+### 🐍 Localmente
+
+```bash
+python -m venv venv
+venv\Scripts\activate          # Windows
+# source venv/bin/activate     # Linux/macOS
+
+pip install -r requirements.txt
+psql -U usuario -d monitoramento_industrial -f database/schema.sql
+uvicorn app.main:app --reload
+```
+
+Acesse a documentação em **http://127.0.0.1:8000/docs**.
+
+### 🤖 Simulador da ESP32
+
+O arquivo `app/simulador_esp32.py` simula três máquinas (CNC, injetora e prensa) enviando leituras a cada 2 segundos. Ele consulta as ordens de manutenção abertas para colocar a máquina em `Manutenção` e mantém um buffer em memória caso a rede caia.
+
+```bash
+API_BASE_URL=http://localhost:8000 python -m app.simulador_esp32
+```
+
+---
+
+## 🧪 Testes e CI
+
+Os testes ficam em `tests/`, divididos em três camadas:
+
+| Camada | Pasta | O que cobre |
+|---|---|---|
+| 🧩 Unitários | `tests/unit` | Autenticação, modelos, WebSocket manager e repositório com mocks |
+| 🌐 API | `tests/api` | Rotas, login, RBAC, telemetria e WebSocket |
+| 🗄️ Integração | `tests/integration` | Repositório rodando contra um PostgreSQL real |
+
+```bash
+pip install -r requirements-dev.txt
+
+# Unitários + API, com cobertura
+pytest tests/unit tests/api --cov=app --cov-report=term-missing
+
+# Integração (exige um PostgreSQL com o schema aplicado)
+pytest tests/integration
+```
+
+A pipeline do **GitHub Actions** (`.github/workflows/pipeline.yml`) roda a cada push e pull request:
+
+1. **Code Quality** — compilação, `ruff check` e `ruff format --check`;
+2. **Compatibility** — instalação e importação da aplicação no Ubuntu e no Windows;
+3. **Automated Tests** — testes unitários e de API com cobertura;
+4. **Integration Tests** — testes contra um serviço PostgreSQL 18 com o schema aplicado.
+
+O Dependabot mantém as dependências atualizadas.
+
+---
+
+## 📁 Estrutura do projeto
+
+```
+Simple-IHM-Backend/
+├── app/
+│   ├── main.py               # Rotas REST e WebSocket
+│   ├── auth.py               # JWT, API Key e RBAC
+│   ├── models.py             # Schemas Pydantic
+│   ├── repository.py         # Consultas SQL (asyncpg)
+│   ├── database.py           # Pool de conexões
+│   ├── dbconfig.py           # Configuração por variáveis de ambiente
+│   ├── websocket_manager.py  # Gerenciador de conexões em tempo real
+│   └── simulador_esp32.py    # Simulador das máquinas
+├── database/
+│   └── schema.sql            # Schema do PostgreSQL
+├── tests/
+│   ├── unit/
+│   ├── api/
+│   └── integration/
+├── docs/images/              # Imagens do README
+├── .github/workflows/        # Pipeline de CI
+├── Dockerfile
+└── docker-compose.yml
+```
+
+---
+
+## 👥 Equipe
+
+O projeto foi desenvolvido em equipe, simulando um ambiente real de desenvolvimento de software:
+
+| Área | Responsável |
+|---|---|
+| ⚙️ **Backend e banco de dados** (este repositório) | [Pedro Henrique Cavenaghi](https://github.com/Pedro-Cavenaghi) |
+| 🖥️ **Frontend e dashboard** ([Simple-IHM-Frontend](https://github.com/SamukaSantos-DEV/Simple-IHM-Frontend)) | [Samuka Santos](https://github.com/SamukaSantos-DEV) |
+
+<div align="center">
+
+<br>
+
+<sub>🎓 Projeto acadêmico — Fatec</sub>
+
+</div>
