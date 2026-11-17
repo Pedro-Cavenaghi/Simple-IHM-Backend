@@ -429,8 +429,10 @@ O projeto foi desenvolvido em equipe, simulando um ambiente real de desenvolvime
 
 | Área | Responsável |
 |---|---|
-| ⚙️ **Backend e banco de dados** (este repositório) | [Pedro Henrique Cavenaghi](https://github.com/Pedro-Cavenaghi) |
+| ⚙️ **Backend e banco de dados** (este repositório) | [Pedro Cavenaghi](https://github.com/Pedro-Cavenaghi) |
+| 🧪 **Testes, Docker e pipeline de CI** (GitHub Actions) | [João Luis](https://github.com/joaoluis2211) |
 | 🖥️ **Frontend e dashboard** ([Simple-IHM-Frontend](https://github.com/SamukaSantos-DEV/Simple-IHM-Frontend)) | [Samuka Santos](https://github.com/SamukaSantos-DEV) |
+| 📝 **Documentação e apresentação** | João Pedro |
 
 <div align="center">
 
