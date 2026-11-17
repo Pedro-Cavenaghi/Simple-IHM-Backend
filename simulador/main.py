@@ -27,6 +27,7 @@ simulador = Simulador(
     GravadorRotulos(config.ARQUIVO_ROTULOS),
     intervalo_envio_s=config.INTERVALO_ENVIO_S,
     intervalo_sincronizacao_s=config.INTERVALO_SINCRONIZACAO_S,
+    enviar_por_padrao=not config.INICIAR_PAUSADO,
 )
 
 
@@ -108,7 +109,7 @@ def _card_maquina(m: EstadoMaquina):
                     backward=lambda nome: f"{nome} · {m.setor or 'sem setor'}",
                 )
             ui.space()
-            chip_status = ui.badge("—").classes("text-sm px-2 py-1")
+            chip_status = ui.badge("—", color="grey-8").classes("text-sm px-2 py-1")
             icone_resultado = ui.icon("hourglass_empty", size="sm").classes(
                 "text-slate-500"
             )
@@ -306,9 +307,28 @@ def painel():
         else:
             ui.notify(cliente.ultimo_erro or "Falha ao sincronizar", type="negative")
 
-    def definir_envio(ligado: bool) -> None:
-        for m in simulador.maquinas.values():
-            m.enviando = ligado
+    def pausar_todas() -> None:
+        simulador.pausar_todas()
+        ui.notify("Envio pausado em todas as máquinas", type="info")
+
+    def retomar_todas() -> None:
+        simulador.retomar_todas()
+        ui.notify("Envio retomado em todas as máquinas", type="positive")
+
+    async def desligar_todas() -> None:
+        resultados = await simulador.desligar_todas()
+        entregues = sum(r == ResultadoEnvio.ENVIADO for r in resultados)
+        if entregues == len(resultados):
+            ui.notify(
+                f"{entregues} máquina(s) desligada(s) no dashboard e envio pausado",
+                type="positive",
+            )
+        else:
+            ui.notify(
+                f"Envio pausado, mas só {entregues} de {len(resultados)} leituras "
+                "'Desligada' chegaram à API (o restante ficou no buffer)",
+                type="warning",
+            )
 
     def baixar_rotulos() -> None:
         if config.ARQUIVO_ROTULOS.exists():
@@ -328,11 +348,15 @@ def painel():
         ui.space()
         chip_api = ui.badge("API: aguardando").classes("px-2 py-1")
         rotulo_buffer = ui.label().classes("text-xs text-amber-300")
+        chip_pausado = ui.badge("⏸ Envio pausado", color="warning").classes("px-2 py-1")
         with ui.button(icon="more_vert").props("flat round color=white"):
             with ui.menu():
                 ui.menu_item("Sincronizar máquinas", on_click=sincronizar)
-                ui.menu_item("Pausar todas", on_click=lambda: definir_envio(False))
-                ui.menu_item("Retomar todas", on_click=lambda: definir_envio(True))
+                ui.menu_item("Pausar todas", on_click=pausar_todas)
+                ui.menu_item("Retomar todas", on_click=retomar_todas)
+                ui.menu_item("Desligar todas", on_click=desligar_todas).tooltip(
+                    "Envia 'Desligada' de cada máquina e pausa o envio"
+                )
                 ui.separator()
                 ui.menu_item("Baixar rótulos (CSV)", on_click=baixar_rotulos)
 
@@ -371,6 +395,9 @@ def painel():
             chip_api.text, cor = "API: offline", "negative"
         chip_api.props(f"color={cor}")
 
+        chip_pausado.set_visibility(
+            bool(simulador.maquinas) and simulador.todas_pausadas
+        )
         rotulo_buffer.text = (
             f"{len(cliente.buffer)} no buffer" if cliente.buffer else ""
         )

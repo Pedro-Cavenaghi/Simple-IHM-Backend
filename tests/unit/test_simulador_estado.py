@@ -14,6 +14,8 @@ class ClienteFalso:
         self.maquinas = maquinas
         self.resultado = resultado
         self.enviadas = []
+        self.buffer = []
+        self.descarregamentos = 0
 
     async def listar_maquinas(self):
         return self.maquinas
@@ -21,6 +23,11 @@ class ClienteFalso:
     async def enviar(self, leitura):
         self.enviadas.append(leitura)
         return self.resultado
+
+    async def descarregar_buffer(self):
+        self.descarregamentos += 1
+        self.buffer.clear()
+        return 0
 
 
 class Relogio:
@@ -186,3 +193,89 @@ async def test_envio_grava_rotulo_verdadeiro_sem_enviar_para_a_api(tmp_path):
     assert all("cenario" not in leitura for leitura in cliente.enviadas)
     # A falha aparece nos dados: vibração acima da nominal
     assert float(linhas[1]["vibracao_rms"]) > perfil_padrao("CNC-01").vibracao_rms
+
+
+# ---------- Pausa e desligamento ----------
+
+
+@pytest.mark.asyncio
+async def test_iniciar_pausado_cria_maquinas_sem_enviar():
+    cliente = ClienteFalso([maquina_api(1), maquina_api(2, "INJ-01")])
+    sim = criar_simulador(cliente)
+    sim.enviar_por_padrao = False
+
+    await sim.sincronizar_maquinas()
+    await sim.ciclo()
+
+    assert sim.todas_pausadas is True
+    assert cliente.enviadas == []
+
+
+@pytest.mark.asyncio
+async def test_pausar_todas_vale_para_maquinas_cadastradas_depois():
+    cliente = ClienteFalso([maquina_api(1)])
+    sim = criar_simulador(cliente)
+    await sim.sincronizar_maquinas()
+
+    sim.pausar_todas()
+    cliente.maquinas = [maquina_api(1), maquina_api(2, "INJ-01")]
+    await sim.sincronizar_maquinas()
+    await sim.ciclo()
+
+    assert sim.maquinas[2].enviando is False
+    assert cliente.enviadas == []
+
+
+@pytest.mark.asyncio
+async def test_retomar_todas_volta_a_enviar():
+    cliente = ClienteFalso([maquina_api(1), maquina_api(2, "INJ-01")])
+    sim = criar_simulador(cliente)
+    sim.enviar_por_padrao = False
+    await sim.sincronizar_maquinas()
+
+    sim.retomar_todas()
+    await sim.ciclo()
+
+    assert sim.todas_pausadas is False
+    assert len(cliente.enviadas) == 2
+
+
+@pytest.mark.asyncio
+async def test_desligar_todas_envia_desligada_e_pausa():
+    cliente = ClienteFalso(
+        [maquina_api(1), maquina_api(2, "INJ-01", em_manutencao=True)]
+    )
+    sim = criar_simulador(cliente)
+    await sim.sincronizar_maquinas()
+    sim.maquinas[1].modo_automatico = True
+    sim.maquinas[1].iniciar_cenario("sobrecarga", sim.relogio())
+
+    resultados = await sim.desligar_todas()
+
+    assert resultados == [ResultadoEnvio.ENVIADO, ResultadoEnvio.ENVIADO]
+    status = {
+        leitura["maquina_id"]: leitura["status_atual"] for leitura in cliente.enviadas
+    }
+    assert status == {1: "Desligada", 2: "Manutenção"}
+    assert cliente.enviadas[0]["corrente_ampere"] == 0.0
+    assert sim.todas_pausadas is True
+    assert sim.maquinas[1].cenario is None
+    assert sim.maquinas[1].modo_automatico is False
+
+    # Nenhuma leitura nova sai depois do desligamento
+    await sim.ciclo()
+    assert len(cliente.enviadas) == 2
+
+
+@pytest.mark.asyncio
+async def test_pausado_ainda_descarrega_o_buffer():
+    cliente = ClienteFalso([maquina_api(1)])
+    sim = criar_simulador(cliente)
+    await sim.sincronizar_maquinas()
+    sim.pausar_todas()
+    cliente.buffer.append({"maquina_id": 1})
+
+    await sim.ciclo()
+
+    assert cliente.descarregamentos == 1
+    assert cliente.buffer == []
