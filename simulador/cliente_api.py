@@ -10,6 +10,7 @@ class ResultadoEnvio(str, Enum):
     ENVIADO = "enviado"
     BUFFER = "buffer"  # falha temporária: guardado para reenviar
     REJEITADO = "rejeitado"  # a API recusou (ex.: API Key ou validação)
+    GERADO_OFFLINE = "gerado_offline"  # dataset gerado sem API (gerar_dataset.py)
 
 
 class ClienteAPI:

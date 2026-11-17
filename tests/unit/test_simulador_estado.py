@@ -279,3 +279,75 @@ async def test_pausado_ainda_descarrega_o_buffer():
 
     assert cliente.descarregamentos == 1
     assert cliente.buffer == []
+
+
+# ---------- Coleta automática integrada ----------
+
+
+@pytest.mark.asyncio
+async def test_iniciar_coleta_prepara_maquinas_e_grava_sessao(tmp_path):
+    arquivo = tmp_path / "rotulos.csv"
+    cliente = ClienteFalso([maquina_api(1), maquina_api(2, "INJ-01")])
+    sim = criar_simulador(cliente, GravadorRotulos(arquivo))
+    await sim.sincronizar_maquinas()
+    sim.pausar_todas()
+    sim.maquinas[1].status = "Inativa"
+    sim.maquinas[2].modo_automatico = True
+
+    sim.iniciar_coleta("sessao-teste")
+    await sim.ciclo()
+    sim.gravador.fechar()
+
+    assert sim.todas_pausadas is False
+    assert sim.maquinas[1].status == "Ativa"
+    assert sim.maquinas[2].modo_automatico is False
+    with arquivo.open(encoding="utf-8") as f:
+        assert {linha["sessao"] for linha in csv.DictReader(f)} == {"sessao-teste"}
+
+
+@pytest.mark.asyncio
+async def test_rotulo_registra_intensidade_e_progresso(tmp_path):
+    arquivo = tmp_path / "rotulos.csv"
+    cliente = ClienteFalso([maquina_api()])
+    relogio = Relogio()
+    sim = criar_simulador(cliente, GravadorRotulos(arquivo), relogio)
+    await sim.sincronizar_maquinas()
+    maquina = sim.maquinas[1]
+
+    maquina.iniciar_cenario("sobrecarga", relogio.agora, duracao_s=40, intensidade=1.3)
+    relogio.agora += 10
+    await sim.enviar_maquina(maquina)
+    sim.gravador.fechar()
+
+    with arquivo.open(encoding="utf-8") as f:
+        linha = next(csv.DictReader(f))
+    assert linha["sessao"] == "manual"
+    assert float(linha["intensidade"]) == pytest.approx(1.3)
+    assert float(linha["cenario_progresso"]) == pytest.approx(0.25)
+
+
+@pytest.mark.asyncio
+async def test_pausar_e_desligar_encerram_a_coleta():
+    cliente = ClienteFalso([maquina_api()])
+    sim = criar_simulador(cliente)
+    await sim.sincronizar_maquinas()
+
+    sim.iniciar_coleta()
+    sim.pausar_todas()
+    assert sim.coleta.ativa is False
+
+    sim.iniciar_coleta()
+    await sim.desligar_todas()
+    assert sim.coleta.ativa is False
+
+
+def test_cenario_com_duracao_e_intensidade_personalizadas():
+    m = EstadoMaquina.a_partir_da_api(maquina_api())
+    m.iniciar_cenario("desgaste_rolamento", agora=0, duracao_s=100, intensidade=0.5)
+    base = m.parametros.vibracao_rms
+
+    no_fim = m.parametros_efetivos(99.9).vibracao_rms
+
+    assert no_fim == pytest.approx(base * (1 + 2.5 * 0.5), rel=0.01)
+    m.atualizar_cenario(100)
+    assert m.cenario is None

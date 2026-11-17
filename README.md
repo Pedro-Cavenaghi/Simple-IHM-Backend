@@ -385,7 +385,8 @@ O simulador (`simulador/`) faz o papel das ESP32 do chão de fábrica: um **pain
 | 📉 Queda de tensão | Tensão cai para ~190 V, corrente +12% | 45 s |
 | 🌀 Desbalanceamento | Vibração oscilante | 2 min |
 
-- 🏷️ **Rótulo verdadeiro para o ML:** cada leitura é gravada em `simulador/dados/rotulos.csv` com o cenário ativo (`normal`, `sobrecarga`, …). O rótulo **nunca** vai para a API, pois uma ESP32 real não sabe que está com falha. O CSV pode ser baixado pelo menu do painel;
+- 🧪 **Coleta automática** (menu ⋮): dispara falhas sozinha em todas as máquinas, sorteando o **tipo**, a **intensidade** (0,5× a 1,5×) e a **duração** (0,6× a 1,6× da padrão), com 2 a 8 min de operação normal entre uma falha e outra. A variação impede que o modelo só decore a fórmula do simulador;
+- 🏷️ **Rótulo verdadeiro para o ML:** cada leitura é gravada em `simulador/dados/rotulos.csv` com o cenário ativo (`normal`, `sobrecarga`, …), a intensidade, o progresso da falha e a sessão de coleta. O rótulo **nunca** vai para a API, pois uma ESP32 real não sabe que está com falha. O CSV pode ser baixado pelo menu do painel;
 - ⏸️ **Pausar, retomar e desligar todas** pelo menu ⋮. *Desligar todas* envia uma última leitura `Desligada` de cada máquina antes de pausar, para o dashboard não ficar mostrando a última leitura como atual;
 - 📦 **Buffer offline:** se a API cair, as leituras ficam guardadas e são reenviadas em ordem cronológica quando ela volta.
 
@@ -409,6 +410,37 @@ Acesse **http://localhost:8081**. O simulador lê o mesmo `.env` da raiz; as var
 | `PORT` | `8081` | Porta do painel (o Railway define sozinho) |
 
 **Deploy no Railway:** crie um serviço a partir deste repositório com a variável `RAILWAY_DOCKERFILE_PATH=simulador/Dockerfile` e configure `API_BASE_URL`, `API_KEY`, `PAINEL_SENHA` e, de preferência, `INICIAR_PAUSADO=true`. Como o disco do Railway é efêmero, baixe o CSV de rótulos antes de um novo deploy.
+
+### 📊 Gerando o dataset de treino
+
+Para treinar os modelos não é preciso deixar o painel rodando por horas. O gerador offline usa **o mesmo motor do painel** (física, cenários e coleta automática) com um relógio simulado: gera dias de operação em segundos, sem API e sem gravar nada no banco.
+
+```bash
+python -m simulador.gerar_dataset --sessoes 6 --horas 4 --seed 42
+```
+
+```
+Dataset gerado em 25.2s: ml/dados/dataset.csv
+6 sessões × 4 h · 172800 leituras · 797 falhas disparadas
+  normal                 123739  (71.6%)
+  desgaste_rolamento      26895  (15.6%)
+  desbalanceamento        13167  (7.6%)
+  queda_tensao             5405  (3.1%)
+  sobrecarga               3594  (2.1%)
+```
+
+- Cada **sessão** tem semente própria e fica num dia diferente, para que treino e teste sejam separados por sessão, e não por linhas sorteadas (linhas vizinhas são quase idênticas e vazariam de um lado para o outro);
+- A mesma `--seed` sempre gera o mesmo arquivo, então os experimentos são reprodutíveis;
+- O CSV tem as mesmas colunas do `rotulos.csv` do painel, e os dois podem ser combinados.
+
+| Coluna | Significado |
+|---|---|
+| `sessao` | Sessão de coleta (`offline-s42-01`, `coleta-…` ou `manual`) |
+| `cenario` | Rótulo verdadeiro: `normal`, `manutencao` ou a falha |
+| `intensidade` | Força da falha (0 quando normal) |
+| `cenario_progresso` | De 0 a 1, quanto da falha já passou. Serve para medir a antecedência da detecção |
+| `parametros_alterados` | 1 se os sliders estavam fora do perfil nominal |
+| `tensao_volt` … `frequencia_hz` | Exatamente o que foi (ou seria) enviado à API |
 
 ---
 
@@ -461,6 +493,8 @@ Simple-IHM-Backend/
 │   ├── fisica.py             # Ruído, potência e cenários de falha
 │   ├── cliente_api.py        # HTTP com buffer offline
 │   ├── rotulos.py            # CSV com o rótulo verdadeiro (dataset do ML)
+│   ├── coleta.py             # Coleta automática de falhas variadas
+│   ├── gerar_dataset.py      # Gerador offline do dataset de treino
 │   └── Dockerfile
 ├── database/
 │   └── schema.sql            # Schema do PostgreSQL

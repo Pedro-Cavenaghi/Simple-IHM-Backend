@@ -11,3 +11,6 @@ database/backup-monitoramento_industrial.sql
 
 # Rótulos gerados pelo simulador (dataset local)
 simulador/dados/
+
+# Datasets gerados para o ML
+ml/dados/
