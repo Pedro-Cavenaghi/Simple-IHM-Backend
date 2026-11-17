@@ -8,3 +8,8 @@ venv/
 env/
 .git
 .env
+# Machine learning: só o código e o modelo entram na imagem
+ml/dados/
+ml/figuras/
+ml/*.ipynb
+simulador/dados/

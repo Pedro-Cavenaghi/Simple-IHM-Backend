@@ -126,6 +126,7 @@ async def db_conn():
     await conn.execute(
         """
         TRUNCATE TABLE
+            alertas,
             audit_logs,
             logs_maquinas,
             status_atual_maquinas,
@@ -141,6 +142,7 @@ async def db_conn():
     await conn.execute(
         """
         TRUNCATE TABLE
+            alertas,
             audit_logs,
             logs_maquinas,
             status_atual_maquinas,

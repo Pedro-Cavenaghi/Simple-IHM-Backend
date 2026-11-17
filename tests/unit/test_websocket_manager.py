@@ -187,3 +187,34 @@ async def test_broadcast_remove_conexao_global_com_erro(
     await connection_manager.broadcast({"temperatura": 35.5})
 
     assert websocket_global not in connection_manager.global_connections
+
+
+# ---------- canal de alertas ----------
+
+
+@pytest.mark.asyncio
+async def test_canal_de_alertas_conecta_transmite_e_desconecta(connection_manager):
+    ativo = AsyncMock()
+    quebrado = AsyncMock()
+    quebrado.send_json.side_effect = RuntimeError("conexão caiu")
+    await connection_manager.connect_alertas(ativo)
+    await connection_manager.connect_alertas(quebrado)
+
+    await connection_manager.broadcast_alertas({"tipo": "alerta_criado"})
+
+    ativo.send_json.assert_awaited_once_with({"tipo": "alerta_criado"})
+    assert connection_manager.alert_connections == [ativo]
+
+    connection_manager.disconnect_alertas(ativo)
+    connection_manager.disconnect_alertas(ativo)  # remover de novo é seguro
+    assert connection_manager.alert_connections == []
+
+
+@pytest.mark.asyncio
+async def test_alertas_nao_vao_para_o_canal_de_telemetria(connection_manager):
+    telemetria = AsyncMock()
+    await connection_manager.connect_global(telemetria)
+
+    await connection_manager.broadcast_alertas({"tipo": "alerta_criado"})
+
+    telemetria.send_json.assert_not_awaited()

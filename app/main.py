@@ -4,7 +4,16 @@ from contextlib import asynccontextmanager
 from datetime import date, datetime
 
 import asyncpg
-from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, status
+from fastapi import (
+    BackgroundTasks,
+    Depends,
+    FastAPI,
+    HTTPException,
+    Query,
+    WebSocket,
+    status,
+)
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import FileResponse
@@ -14,12 +23,15 @@ from pydantic import BaseModel
 import app.repository as repository
 from app import auth
 from app.database import Database, get_db
+from app.migracoes import aplicar_migracoes
+from app.monitor import ArmazenamentoPostgres, MonitorFalhas, carregar_modelo
 
 # Importação do gerenciador de WebSockets
 from app.websocket_manager import manager
 
 # Importações internas dos modelos
 from .models import (
+    AlertaResponse,
     AuditLogResponse,
     FuncionarioCreate,
     FuncionarioResponse,
@@ -49,9 +61,22 @@ class LoginRequest(BaseModel):
     senha: str
 
 
+async def notificar_alerta(tipo: str, alerta: dict) -> None:
+    """Envia a mudança de um alerta para quem está ouvindo /ws/alertas."""
+    await manager.broadcast_alertas(
+        {"tipo": tipo, "alerta": jsonable_encoder(AlertaResponse(**alerta))}
+    )
+
+
+monitor = MonitorFalhas(ArmazenamentoPostgres(Database.get_pool), notificar_alerta)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await Database.connect()
+    migracoes = await aplicar_migracoes(Database.get_pool())
+    print(f"--- Migrações aplicadas: {', '.join(migracoes) or 'nenhuma'} ---")
+    await monitor.iniciar(carregar_modelo())
     print("\n" + "=" * 60)
     print("🚀 API DO ECOSSISTEMA IoT INDUSTRIAL ONLINE!")
     print("🔗 Local:        http://127.0.0.1:8000")
@@ -137,6 +162,7 @@ async def websocket_telemetria_por_id(
 @app.post("/enviar-dados", status_code=status.HTTP_200_OK, tags=["Telemetria IoT"])
 async def receber_dados(
     leitura: LeituraSensor,
+    background_tasks: BackgroundTasks,
     conn: asyncpg.Connection = Depends(get_db),
     _: str = Depends(
         auth.verificar_api_key
@@ -155,6 +181,8 @@ async def receber_dados(
     if sucesso:
         # 2. Transmite os novos dados recebidos via WebSocket Broadcast para os navegadores
         await manager.broadcast(dados_leitura)
+        # 3. Machine learning em segundo plano, depois da resposta à ESP32
+        background_tasks.add_task(monitor.processar, dados_leitura)
         return {
             "status": "Sucesso",
             "mensagem": "Dados gravados e transmitidos em tempo real",
@@ -849,6 +877,98 @@ async def deletar_manutencao_logica(
         "status": "Sucesso",
         "mensagem": f"Ordem {manutencao_id} desativada logicamente.",
     }
+
+
+# ==========================================
+# ALERTAS DO MACHINE LEARNING
+# ==========================================
+
+TODOS_OS_PERFIS = ["ADMIN", "OPERADOR", "MANUTENCAO"]
+
+
+@app.websocket("/ws/alertas")
+async def websocket_alertas(websocket: WebSocket, token: str | None = Query(None)):
+    """Recebe {"tipo": "alerta_criado" | "alerta_atualizado" | "alerta_encerrado" |
+    "alerta_reconhecido", "alerta": {...}} sempre que um alerta muda."""
+    if not token or not auth.validar_token_jwt_simples(token):
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
+    await manager.connect_alertas(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except Exception:
+        manager.disconnect_alertas(websocket)
+
+
+@app.get("/alertas", response_model=list[AlertaResponse], tags=["Alertas de ML"])
+async def listar_alertas(
+    maquina_id: int | None = Query(None, description="Filtrar por máquina"),
+    apenas_abertos: bool = Query(False, description="Só alertas ainda em andamento"),
+    limite: int = Query(100, ge=1, le=500),
+    conn: asyncpg.Connection = Depends(get_db),
+    _: FuncionarioResponse = Depends(auth.PermissaoRequerida(TODOS_OS_PERFIS)),
+):
+    """Alertas gerados pelo machine learning, do mais recente para o mais antigo."""
+    return await repository.listar_alertas(
+        conn, maquina_id=maquina_id, apenas_abertos=apenas_abertos, limite=limite
+    )
+
+
+@app.get("/alertas/{alerta_id}", response_model=AlertaResponse, tags=["Alertas de ML"])
+async def obter_alerta(
+    alerta_id: int,
+    conn: asyncpg.Connection = Depends(get_db),
+    _: FuncionarioResponse = Depends(auth.PermissaoRequerida(TODOS_OS_PERFIS)),
+):
+    alerta = await repository.obter_alerta(conn, alerta_id)
+    if not alerta:
+        raise HTTPException(status_code=404, detail="Alerta não encontrado.")
+    return alerta
+
+
+@app.patch(
+    "/alertas/{alerta_id}/reconhecer",
+    response_model=AlertaResponse,
+    tags=["Alertas de ML"],
+)
+async def reconhecer_alerta(
+    alerta_id: int,
+    conn: asyncpg.Connection = Depends(get_db),
+    usuario_atual: FuncionarioResponse = Depends(
+        auth.PermissaoRequerida(TODOS_OS_PERFIS)
+    ),
+):
+    """Registra que um usuário viu o alerta (não encerra: isso depende da máquina)."""
+    if not await repository.obter_alerta(conn, alerta_id):
+        raise HTTPException(status_code=404, detail="Alerta não encontrado.")
+
+    alerta = await repository.reconhecer_alerta(conn, alerta_id, usuario_atual.id)
+    if not alerta:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Este alerta já foi reconhecido.",
+        )
+
+    await repository.registrar_auditoria(
+        conn=conn,
+        usuario_id=usuario_atual.id,
+        acao="RECONHECER_ALERTA",
+        entidade="alertas",
+        entidade_id=alerta_id,
+        detalhes=f"Reconheceu o alerta {alerta_id}: {alerta['mensagem']}",
+    )
+    await notificar_alerta("alerta_reconhecido", alerta)
+    return alerta
+
+
+@app.get("/ml/status", tags=["Alertas de ML"])
+async def status_do_monitor(
+    _: FuncionarioResponse = Depends(auth.PermissaoRequerida(["ADMIN"])),
+):
+    """Mostra se o modelo está carregado e o estado do monitor em cada máquina."""
+    return monitor.status()
 
 
 if __name__ == "__main__":

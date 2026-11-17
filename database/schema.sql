@@ -406,3 +406,9 @@ ALTER TABLE ONLY public.status_atual_maquinas
 --
 
 \unrestrict 4PJxnYOZlSKSf1oJyP83vyg40yc3IQ9lvnnOHUoUIDoATQdaNDP4uHTJonyWAf0
+
+--
+-- Migrações posteriores ao dump (também aplicadas pela API na inicialização)
+--
+
+\ir migrations/001_alertas.sql

@@ -14,11 +14,21 @@ async def test_lifespan_conecta_e_desconecta_banco(monkeypatch):
     conectar = AsyncMock()
     desconectar = AsyncMock()
 
+    migrar = AsyncMock(return_value=["001_alertas.sql"])
+    iniciar_monitor = AsyncMock()
+    modelo = object()
+
     monkeypatch.setattr(main_module.Database, "connect", conectar)
     monkeypatch.setattr(main_module.Database, "disconnect", desconectar)
+    monkeypatch.setattr(main_module.Database, "get_pool", Mock(return_value="pool"))
+    monkeypatch.setattr(main_module, "aplicar_migracoes", migrar)
+    monkeypatch.setattr(main_module, "carregar_modelo", Mock(return_value=modelo))
+    monkeypatch.setattr(main_module.monitor, "iniciar", iniciar_monitor)
 
     async with main_module.lifespan(main_module.app):
         conectar.assert_awaited_once()
+        migrar.assert_awaited_once_with("pool")
+        iniciar_monitor.assert_awaited_once_with(modelo)
         desconectar.assert_not_awaited()
 
     desconectar.assert_awaited_once()

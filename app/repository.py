@@ -644,3 +644,164 @@ async def soft_delete_manutencao(conn: asyncpg.Connection, manutencao_id: int) -
     except Exception as e:
         print(f"Erro ao aplicar soft delete na manutenção: {e}")
         return False
+
+
+# ==========================================
+# ALERTAS DO MACHINE LEARNING
+# ==========================================
+
+SQL_ALERTA = """
+    SELECT
+        a.id, a.maquina_id, m.tag_maquina, m.nome_maquina,
+        a.diagnostico, a.confianca, a.pontuacao, a.severidade, a.mensagem,
+        a.minutos_ate_limite, a.criado_em, a.atualizado_em, a.encerrado_em,
+        a.reconhecido_em, a.reconhecido_por, f.nome AS reconhecido_por_nome,
+        a.manutencao_id
+    FROM alertas a
+    JOIN maquinas m ON m.id = a.maquina_id
+    LEFT JOIN funcionarios f ON f.id = a.reconhecido_por
+"""
+
+
+async def obter_alerta(conn: asyncpg.Connection, alerta_id: int) -> dict | None:
+    try:
+        registro = await conn.fetchrow(SQL_ALERTA + " WHERE a.id = $1;", alerta_id)
+        return dict(registro) if registro else None
+    except Exception as e:
+        print(f"Erro ao obter alerta: {e}")
+        return None
+
+
+async def listar_alertas(
+    conn: asyncpg.Connection,
+    maquina_id: int | None = None,
+    apenas_abertos: bool = False,
+    limite: int = 100,
+) -> list[dict]:
+    try:
+        sql = (
+            SQL_ALERTA
+            + """
+            WHERE ($1::int IS NULL OR a.maquina_id = $1)
+              AND (NOT $2::boolean OR a.encerrado_em IS NULL)
+            ORDER BY a.criado_em DESC
+            LIMIT $3;
+        """
+        )
+        registros = await conn.fetch(sql, maquina_id, apenas_abertos, limite)
+        return [dict(r) for r in registros]
+    except Exception as e:
+        print(f"Erro ao listar alertas: {e}")
+        return []
+
+
+async def criar_alerta(conn: asyncpg.Connection, dados: dict) -> dict | None:
+    try:
+        sql = """
+            INSERT INTO alertas
+            (maquina_id, diagnostico, confianca, pontuacao, severidade,
+             mensagem, minutos_ate_limite)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            RETURNING id;
+        """
+        alerta_id = await conn.fetchval(
+            sql,
+            dados["maquina_id"],
+            dados.get("diagnostico"),
+            dados.get("confianca"),
+            dados.get("pontuacao", 0.0),
+            dados.get("severidade", "media"),
+            dados["mensagem"],
+            dados.get("minutos_ate_limite"),
+        )
+        return await obter_alerta(conn, alerta_id)
+    except Exception as e:
+        print(f"Erro ao criar alerta: {e}")
+        return None
+
+
+async def atualizar_alerta(
+    conn: asyncpg.Connection, alerta_id: int, dados: dict
+) -> dict | None:
+    """Atualiza o diagnóstico de um alerta ainda aberto."""
+    try:
+        sql = """
+            UPDATE alertas
+            SET diagnostico = $2, confianca = $3, pontuacao = $4,
+                severidade = $5, mensagem = $6, minutos_ate_limite = $7,
+                atualizado_em = NOW()
+            WHERE id = $1 AND encerrado_em IS NULL
+            RETURNING id;
+        """
+        atualizado = await conn.fetchval(
+            sql,
+            alerta_id,
+            dados.get("diagnostico"),
+            dados.get("confianca"),
+            dados.get("pontuacao", 0.0),
+            dados.get("severidade", "media"),
+            dados["mensagem"],
+            dados.get("minutos_ate_limite"),
+        )
+        return await obter_alerta(conn, alerta_id) if atualizado else None
+    except Exception as e:
+        print(f"Erro ao atualizar alerta: {e}")
+        return None
+
+
+async def encerrar_alerta(conn: asyncpg.Connection, alerta_id: int) -> dict | None:
+    try:
+        sql = """
+            UPDATE alertas
+            SET encerrado_em = NOW(), atualizado_em = NOW()
+            WHERE id = $1 AND encerrado_em IS NULL
+            RETURNING id;
+        """
+        encerrado = await conn.fetchval(sql, alerta_id)
+        return await obter_alerta(conn, alerta_id) if encerrado else None
+    except Exception as e:
+        print(f"Erro ao encerrar alerta: {e}")
+        return None
+
+
+async def reconhecer_alerta(
+    conn: asyncpg.Connection, alerta_id: int, usuario_id: int
+) -> dict | None:
+    """Marca que alguém viu o alerta. Retorna None se já tinha sido reconhecido."""
+    try:
+        sql = """
+            UPDATE alertas
+            SET reconhecido_em = NOW(), reconhecido_por = $2
+            WHERE id = $1 AND reconhecido_em IS NULL
+            RETURNING id;
+        """
+        reconhecido = await conn.fetchval(sql, alerta_id, usuario_id)
+        return await obter_alerta(conn, alerta_id) if reconhecido else None
+    except Exception as e:
+        print(f"Erro ao reconhecer alerta: {e}")
+        return None
+
+
+async def buscar_leituras_recentes(
+    conn: asyncpg.Connection, maquina_id: int, limite: int, horas: int = 2
+) -> list[dict]:
+    """Últimas leituras com a máquina em operação, em ordem cronológica.
+
+    Usado pelo monitor de ML para não começar "às cegas" depois de um deploy.
+    """
+    try:
+        sql = """
+            SELECT tensao_volt, corrente_ampere, potencia_watt,
+                   vibracao_rms, frequencia_hz
+            FROM logs_maquinas
+            WHERE maquina_id = $1
+              AND status_no_momento = 'Ativa'
+              AND horario_do_log >= NOW() - make_interval(hours => $3)
+            ORDER BY horario_do_log DESC, id DESC
+            LIMIT $2;
+        """
+        registros = await conn.fetch(sql, maquina_id, limite, horas)
+        return [dict(r) for r in reversed(registros)]
+    except Exception as e:
+        print(f"Erro ao buscar leituras recentes: {e}")
+        return []
