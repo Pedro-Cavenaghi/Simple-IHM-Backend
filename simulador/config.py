@@ -15,6 +15,14 @@ API_KEY = os.getenv("API_KEY", "chave_interna_simple_ihm_2026")
 # Cadência de envio, igual à de uma ESP32 real
 INTERVALO_ENVIO_S = float(os.getenv("INTERVALO_ENVIO_S", "2"))
 
+# Sobe com todas as máquinas pausadas: reinícios e deploys nunca religam o envio sozinhos
+INICIAR_PAUSADO = os.getenv("INICIAR_PAUSADO", "false").strip().lower() in {
+    "1",
+    "true",
+    "sim",
+    "yes",
+}
+
 # De quanto em quanto tempo a lista de máquinas e as manutenções são recarregadas
 INTERVALO_SINCRONIZACAO_S = float(os.getenv("INTERVALO_SINCRONIZACAO_S", "15"))
 

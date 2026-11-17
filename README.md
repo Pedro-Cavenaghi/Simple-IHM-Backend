@@ -386,6 +386,7 @@ O simulador (`simulador/`) faz o papel das ESP32 do chão de fábrica: um **pain
 | 🌀 Desbalanceamento | Vibração oscilante | 2 min |
 
 - 🏷️ **Rótulo verdadeiro para o ML:** cada leitura é gravada em `simulador/dados/rotulos.csv` com o cenário ativo (`normal`, `sobrecarga`, …). O rótulo **nunca** vai para a API, pois uma ESP32 real não sabe que está com falha. O CSV pode ser baixado pelo menu do painel;
+- ⏸️ **Pausar, retomar e desligar todas** pelo menu ⋮. *Desligar todas* envia uma última leitura `Desligada` de cada máquina antes de pausar, para o dashboard não ficar mostrando a última leitura como atual;
 - 📦 **Buffer offline:** se a API cair, as leituras ficam guardadas e são reenviadas em ordem cronológica quando ela volta.
 
 **Executando localmente** (com a API rodando em `http://localhost:8000`):
@@ -402,11 +403,12 @@ Acesse **http://localhost:8081**. O simulador lê o mesmo `.env` da raiz; as var
 | `API_BASE_URL` | `http://localhost:8000` | Endereço da API |
 | `API_KEY` | chave de dev | Deve ser igual à da API |
 | `INTERVALO_ENVIO_S` | `2` | Intervalo entre leituras |
+| `INICIAR_PAUSADO` | `false` | Com `true`, o simulador sobe com todas as máquinas pausadas, e reinícios ou deploys nunca religam o envio sozinhos |
 | `PAINEL_SENHA` | *(vazio)* | Senha do painel. **Defina em produção** |
 | `STORAGE_SECRET` | aleatório | Assina o cookie de login (fixe para manter sessões entre restarts) |
 | `PORT` | `8081` | Porta do painel (o Railway define sozinho) |
 
-**Deploy no Railway:** crie um serviço a partir deste repositório com a variável `RAILWAY_DOCKERFILE_PATH=simulador/Dockerfile` e configure `API_BASE_URL`, `API_KEY` e `PAINEL_SENHA`. Como o disco do Railway é efêmero, baixe o CSV de rótulos antes de um novo deploy.
+**Deploy no Railway:** crie um serviço a partir deste repositório com a variável `RAILWAY_DOCKERFILE_PATH=simulador/Dockerfile` e configure `API_BASE_URL`, `API_KEY`, `PAINEL_SENHA` e, de preferência, `INICIAR_PAUSADO=true`. Como o disco do Railway é efêmero, baixe o CSV de rótulos antes de um novo deploy.
 
 ---
 

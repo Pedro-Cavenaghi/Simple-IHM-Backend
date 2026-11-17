@@ -131,6 +131,7 @@ class Simulador:
         intervalo_sincronizacao_s: float,
         rng: random.Random | None = None,
         relogio: Callable[[], float] = time.monotonic,
+        enviar_por_padrao: bool = True,
     ):
         self.cliente = cliente
         self.gravador = gravador
@@ -140,6 +141,8 @@ class Simulador:
         self.relogio = relogio
         self.maquinas: dict[int, EstadoMaquina] = {}
         self.ultima_sincronizacao: float | None = None
+        # Vale para as máquinas que ainda vão aparecer na sincronização
+        self.enviar_por_padrao = enviar_por_padrao
 
     async def sincronizar_maquinas(self) -> bool:
         """Atualiza a lista de máquinas e o estado de manutenção a partir da API."""
@@ -152,7 +155,9 @@ class Simulador:
             ids_api.add(item["id"])
             existente = self.maquinas.get(item["id"])
             if existente is None:
-                self.maquinas[item["id"]] = EstadoMaquina.a_partir_da_api(item)
+                nova = EstadoMaquina.a_partir_da_api(item)
+                nova.enviando = self.enviar_por_padrao
+                self.maquinas[item["id"]] = nova
             else:
                 existente.tag = item["tag_maquina"]
                 existente.nome = item["nome_maquina"]
@@ -192,9 +197,42 @@ class Simulador:
             )
         return resultado
 
+    @property
+    def todas_pausadas(self) -> bool:
+        return not any(m.enviando for m in self.maquinas.values())
+
+    def pausar_todas(self) -> None:
+        self.enviar_por_padrao = False
+        for m in self.maquinas.values():
+            m.enviando = False
+
+    def retomar_todas(self) -> None:
+        self.enviar_por_padrao = True
+        for m in self.maquinas.values():
+            m.enviando = True
+
+    async def desligar_todas(self) -> list[ResultadoEnvio]:
+        """Envia uma última leitura 'Desligada' de cada máquina e pausa o envio.
+
+        Sem isso, o dashboard continuaria mostrando a última leitura como atual.
+        Máquinas com manutenção aberta continuam reportando 'Manutenção'.
+        """
+        self.pausar_todas()
+        for m in self.maquinas.values():
+            m.status = "Desligada"
+            m.modo_automatico = False
+            m.encerrar_cenario()
+        return await asyncio.gather(
+            *(self.enviar_maquina(m) for m in self.maquinas.values())
+        )
+
     async def ciclo(self) -> None:
         ativas = [m for m in self.maquinas.values() if m.enviando]
-        await asyncio.gather(*(self.enviar_maquina(m) for m in ativas))
+        if ativas:
+            await asyncio.gather(*(self.enviar_maquina(m) for m in ativas))
+        elif self.cliente.buffer:
+            # Mesmo pausado, entrega o que ficou guardado durante uma queda da API
+            await self.cliente.descarregar_buffer()
 
     async def executar(self) -> None:
         """Laço principal: sincroniza periodicamente e envia uma leitura por ciclo."""
