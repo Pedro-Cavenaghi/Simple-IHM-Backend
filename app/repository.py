@@ -419,6 +419,38 @@ async def listar_maquinas_cadastradas(conn: asyncpg.Connection):
         return []
 
 
+async def listar_maquinas_para_dispositivos(conn: asyncpg.Connection):
+    """Lista as máquinas ativas indicando se há manutenção em andamento.
+
+    Uma máquina está em manutenção quando possui uma ordem não concluída
+    cuja data agendada já chegou (ordens futuras não travam a máquina).
+    """
+    try:
+        sql = """
+            SELECT
+                m.id,
+                m.tag_maquina,
+                m.nome_maquina,
+                m.setor,
+                EXISTS (
+                    SELECT 1
+                    FROM manutencao_preventiva mp
+                    WHERE mp.maquina_id = m.id
+                      AND mp.concluida = FALSE
+                      AND mp.deletado_em IS NULL
+                      AND mp.data_agendada <= CURRENT_DATE
+                ) AS em_manutencao
+            FROM maquinas m
+            WHERE m.deletado_em IS NULL
+            ORDER BY m.tag_maquina ASC;
+        """
+        registros = await conn.fetch(sql)
+        return [dict(r) for r in registros]
+    except Exception as e:
+        print(f"Erro ao listar máquinas para dispositivos no Repository: {e}")
+        return []
+
+
 async def obter_maquina_por_id(
     conn: asyncpg.Connection, maquina_id: int
 ) -> dict | None:

@@ -31,6 +31,7 @@ from .models import (
     ManutencaoPreventivaResponse,
     ManutencaoPreventivaUpdate,
     MaquinaCreate,
+    MaquinaDispositivoResponse,
     MaquinaResponse,
     MaquinaStatusResponse,
     MaquinaUpdate,
@@ -197,6 +198,23 @@ async def listar_status_por_id(
     if not dados:
         raise HTTPException(status_code=404, detail="Status da máquina não encontrado.")
     return dict(dados)
+
+
+@app.get(
+    "/dispositivos/maquinas",
+    response_model=list[MaquinaDispositivoResponse],
+    tags=["Telemetria IoT"],
+)
+async def listar_maquinas_para_dispositivos(
+    conn: asyncpg.Connection = Depends(get_db),
+    _: str = Depends(auth.verificar_api_key),
+):
+    """Lista as máquinas ativas para a ESP32 / Simulador, autenticado por X-API-Key.
+
+    Informa se cada máquina tem manutenção em andamento, para que o dispositivo
+    passe a reportar o status 'Manutenção'.
+    """
+    return await repository.listar_maquinas_para_dispositivos(conn)
 
 
 # ==========================================
