@@ -30,5 +30,18 @@ services:
       db:
         condition: service_healthy
 
+  simulador:
+    build:
+      context: .
+      dockerfile: simulador/Dockerfile
+    container_name: simple-ihm-simulador
+    restart: always
+    ports:
+      - "8081:8081"
+    environment:
+      - API_BASE_URL=http://backend:8000
+    depends_on:
+      - backend
+
 volumes:
   postgres_data_v18:

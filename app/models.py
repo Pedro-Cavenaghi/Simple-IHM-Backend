@@ -159,6 +159,14 @@ class MaquinaResponse(ResponseBase):
     data_cadastro: datetime
 
 
+class MaquinaDispositivoResponse(ResponseBase):
+    id: int
+    tag_maquina: str
+    nome_maquina: str
+    setor: str | None
+    em_manutencao: bool
+
+
 # ==========================================
 # MANUTENÇÃO PREVENTIVA E PREDITIVA
 # ==========================================

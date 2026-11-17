@@ -240,6 +240,14 @@ async def test_listar_maquinas_cadastradas_trata_erro():
 
 
 @pytest.mark.asyncio
+async def test_listar_maquinas_para_dispositivos_trata_erro():
+    conn = criar_conexao_mock()
+    conn.fetch.side_effect = Exception("Erro no banco")
+
+    assert await repository.listar_maquinas_para_dispositivos(conn) == []
+
+
+@pytest.mark.asyncio
 async def test_obter_maquina_por_id_trata_erro():
     conn = criar_conexao_mock()
     conn.fetchrow.side_effect = Exception("Erro no banco")

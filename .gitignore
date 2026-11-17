@@ -8,3 +8,6 @@ README.txt
 coverage.xml
 database/seed_dev.sql
 database/backup-monitoramento_industrial.sql
+
+# Rótulos gerados pelo simulador (dataset local)
+simulador/dados/

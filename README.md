@@ -35,6 +35,7 @@
 - [Endpoints](#️-endpoints)
 - [Tempo real com WebSocket](#-tempo-real-com-websocket)
 - [Banco de dados](#️-banco-de-dados)
+- [Simulador da ESP32](#-simulador-da-esp32)
 - [Como executar](#-como-executar)
 - [Testes e CI](#-testes-e-ci)
 - [Estrutura do projeto](#-estrutura-do-projeto)
@@ -65,7 +66,7 @@ O **frontend em React** fica no repositório [Simple-IHM-Frontend](https://githu
 ```mermaid
 flowchart LR
     subgraph Fabrica["🏭 Chão de fábrica"]
-        ESP["ESP32 / Simulador<br/>(leitura a cada 2s)"]
+        ESP["ESP32 / Simulador NiceGUI<br/>(leitura a cada 2s)"]
     end
 
     subgraph Railway["☁️ Railway"]
@@ -75,6 +76,7 @@ flowchart LR
     end
 
     ESP -- "POST /enviar-dados<br/>X-API-Key" --> API
+    API -. "GET /dispositivos/maquinas<br/>(máquinas + manutenção)" .-> ESP
     API -- "INSERT log + UPSERT status<br/>(transação)" --> DB
     API -- "broadcast WebSocket" --> FE
     FE -- "REST + JWT Bearer" --> API
@@ -100,6 +102,7 @@ flowchart LR
 | **Validação** | Pydantic v2 + pydantic-settings |
 | **Autenticação** | JWT (python-jose) + bcrypt (passlib) |
 | **Tempo real** | WebSockets nativos do FastAPI |
+| **Simulador** | NiceGUI (painel web em Python) + httpx |
 | **Qualidade** | Ruff (lint + format), pytest, pytest-asyncio, pytest-cov |
 | **Infraestrutura** | Docker, Docker Compose, GitHub Actions, Railway |
 
@@ -111,7 +114,7 @@ A API usa **dois mecanismos de autenticação**, um para máquinas e outro para 
 
 | Quem | Mecanismo | Onde |
 |---|---|---|
-| 🤖 ESP32 / simulador | Header `X-API-Key` | `POST /enviar-dados` |
+| 🤖 ESP32 / simulador | Header `X-API-Key` | `POST /enviar-dados` e `GET /dispositivos/maquinas` |
 | 👤 Usuários | `Authorization: Bearer <JWT>` (validade de 8 h) | Todas as rotas REST protegidas |
 | 🖥️ Dashboard | `?token=<JWT>` no handshake | Rotas WebSocket |
 
@@ -154,6 +157,7 @@ Outras práticas adotadas:
 | Método | Rota | Acesso | Descrição |
 |---|---|---|---|
 | `POST` | `/enviar-dados` | API Key | Recebe a leitura dos sensores, grava e transmite em tempo real |
+| `GET` | `/dispositivos/maquinas` | API Key | Lista as máquinas para a ESP32/simulador, indicando quais estão em manutenção |
 | `GET` | `/status-maquinas` | Todos | Estado atual de todas as máquinas |
 | `GET` | `/status-maquinas/{maquina_id}` | Todos | Estado atual de uma máquina |
 | `GET` | `/logs` | Todos | Histórico filtrável por máquina e período (`hoje`, `semana`, `mes`, `customizado`) |
@@ -339,7 +343,7 @@ API_KEY=troque-pela-chave-da-esp32
 docker compose up --build
 ```
 
-Sobe o PostgreSQL 18 e a API em `http://localhost:8000`.
+Sobe o PostgreSQL 18, a API em `http://localhost:8000` e o simulador em `http://localhost:8081`.
 
 ### 🐍 Localmente
 
@@ -355,13 +359,54 @@ uvicorn app.main:app --reload
 
 Acesse a documentação em **http://127.0.0.1:8000/docs**.
 
-### 🤖 Simulador da ESP32
+---
 
-O arquivo `app/simulador_esp32.py` simula três máquinas (CNC, injetora e prensa) enviando leituras a cada 2 segundos. Ele consulta as ordens de manutenção abertas para colocar a máquina em `Manutenção` e mantém um buffer em memória caso a rede caia.
+## 🤖 Simulador da ESP32
+
+<div align="center">
+<img src="docs/images/simulador.png" alt="Painel do simulador da ESP32" width="900">
+</div>
+
+<br>
+
+O simulador (`simulador/`) faz o papel das ESP32 do chão de fábrica: um **painel web em NiceGUI** onde cada máquina tem sliders de tensão, corrente, fator de potência, vibração e frequência. Ao soltar um slider, a leitura é enviada na hora e a mudança aparece no dashboard em tempo real. Ele passa pelo mesmo caminho de uma ESP32 real (`POST /enviar-dados` com `X-API-Key`), então nada no backend ou no frontend sabe que os dados são simulados.
+
+**Recursos:**
+
+- 🏭 **Máquinas vindas da API:** a lista é sincronizada a cada 15 s por `GET /dispositivos/maquinas`, assim como o estado de manutenção (uma ordem aberta com data de hoje ou anterior coloca a máquina em `Manutenção`);
+- ⚡ **Potência calculada**, nunca digitada: `P = V × I × FP`, para que o dataset não tenha combinações fisicamente impossíveis;
+- 🎲 **Ruído realista** sobre os valores base e **modo automático**, que alterna paradas (`Inativa`/`Desligada`) como no chão de fábrica;
+- 💥 **Cenários de falha reproduzíveis**:
+
+| Cenário | Efeito | Duração |
+|---|---|---|
+| 🔩 Desgaste de rolamento | Vibração sobe aos poucos até 3,5×, corrente +10% | 5 min |
+| ⚡ Sobrecarga | Corrente +40%, leve queda de tensão | 30 s |
+| 📉 Queda de tensão | Tensão cai para ~190 V, corrente +12% | 45 s |
+| 🌀 Desbalanceamento | Vibração oscilante | 2 min |
+
+- 🏷️ **Rótulo verdadeiro para o ML:** cada leitura é gravada em `simulador/dados/rotulos.csv` com o cenário ativo (`normal`, `sobrecarga`, …). O rótulo **nunca** vai para a API, pois uma ESP32 real não sabe que está com falha. O CSV pode ser baixado pelo menu do painel;
+- 📦 **Buffer offline:** se a API cair, as leituras ficam guardadas e são reenviadas em ordem cronológica quando ela volta.
+
+**Executando localmente** (com a API rodando em `http://localhost:8000`):
 
 ```bash
-API_BASE_URL=http://localhost:8000 python -m app.simulador_esp32
+pip install -r simulador/requirements.txt
+python -m simulador.main
 ```
+
+Acesse **http://localhost:8081**. O simulador lê o mesmo `.env` da raiz; as variáveis específicas são:
+
+| Variável | Padrão | Descrição |
+|---|---|---|
+| `API_BASE_URL` | `http://localhost:8000` | Endereço da API |
+| `API_KEY` | chave de dev | Deve ser igual à da API |
+| `INTERVALO_ENVIO_S` | `2` | Intervalo entre leituras |
+| `PAINEL_SENHA` | *(vazio)* | Senha do painel. **Defina em produção** |
+| `STORAGE_SECRET` | aleatório | Assina o cookie de login (fixe para manter sessões entre restarts) |
+| `PORT` | `8081` | Porta do painel (o Railway define sozinho) |
+
+**Deploy no Railway:** crie um serviço a partir deste repositório com a variável `RAILWAY_DOCKERFILE_PATH=simulador/Dockerfile` e configure `API_BASE_URL`, `API_KEY` e `PAINEL_SENHA`. Como o disco do Railway é efêmero, baixe o CSV de rótulos antes de um novo deploy.
 
 ---
 
@@ -371,7 +416,7 @@ Os testes ficam em `tests/`, divididos em três camadas:
 
 | Camada | Pasta | O que cobre |
 |---|---|---|
-| 🧩 Unitários | `tests/unit` | Autenticação, modelos, WebSocket manager e repositório com mocks |
+| 🧩 Unitários | `tests/unit` | Autenticação, modelos, WebSocket manager, repositório com mocks e simulador (física, cenários, buffer e rótulos) |
 | 🌐 API | `tests/api` | Rotas, login, RBAC, telemetria e WebSocket |
 | 🗄️ Integração | `tests/integration` | Repositório rodando contra um PostgreSQL real |
 
@@ -379,7 +424,7 @@ Os testes ficam em `tests/`, divididos em três camadas:
 pip install -r requirements-dev.txt
 
 # Unitários + API, com cobertura
-pytest tests/unit tests/api --cov=app --cov-report=term-missing
+pytest tests/unit tests/api --cov=app --cov=simulador --cov-report=term-missing
 
 # Integração (exige um PostgreSQL com o schema aplicado)
 pytest tests/integration
@@ -407,8 +452,14 @@ Simple-IHM-Backend/
 │   ├── repository.py         # Consultas SQL (asyncpg)
 │   ├── database.py           # Pool de conexões
 │   ├── dbconfig.py           # Configuração por variáveis de ambiente
-│   ├── websocket_manager.py  # Gerenciador de conexões em tempo real
-│   └── simulador_esp32.py    # Simulador das máquinas
+│   └── websocket_manager.py  # Gerenciador de conexões em tempo real
+├── simulador/
+│   ├── main.py               # Painel NiceGUI
+│   ├── estado.py             # Estado das máquinas e laço de envio
+│   ├── fisica.py             # Ruído, potência e cenários de falha
+│   ├── cliente_api.py        # HTTP com buffer offline
+│   ├── rotulos.py            # CSV com o rótulo verdadeiro (dataset do ML)
+│   └── Dockerfile
 ├── database/
 │   └── schema.sql            # Schema do PostgreSQL
 ├── tests/

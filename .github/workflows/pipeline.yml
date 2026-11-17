@@ -42,13 +42,13 @@ jobs:
           python -m pip install -r requirements-dev.txt
 
       - name: Check syntax
-        run: python -m compileall app
+        run: python -m compileall app simulador
 
       - name: Ruff lint
-        run: ruff check app
+        run: ruff check app simulador
 
       - name: Ruff format
-        run: ruff format --check app
+        run: ruff format --check app simulador
 
 
   compatibility:
