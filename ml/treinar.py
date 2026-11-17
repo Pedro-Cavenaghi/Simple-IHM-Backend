@@ -133,7 +133,12 @@ def avaliar(modelo: ModeloFalhas, teste: pd.DataFrame) -> dict:
     alertas = alertas_confirmados(modelo, teste)
     deteccao, _ = avaliar_deteccao(teste, alertas)
     classes, _ = modelo.diagnosticar(teste)
-    diagnostico, _ = avaliar_diagnostico(teste, alertas, classes)
+    diagnostico, _ = avaliar_diagnostico(
+        teste,
+        modelo.pontuacao_anomalia(teste),
+        classes,
+        modelo.leituras_confirmacao,
+    )
     prognostico, _ = avaliar_prognostico(teste, modelo.limite_vibracao)
     return {
         "deteccao": deteccao,

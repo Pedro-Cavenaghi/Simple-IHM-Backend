@@ -33,13 +33,15 @@
     }
   },
   "diagnostico": {
+    "alertas": 262,
+    "alertas_sem_falha": 2,
     "falhas_diagnosticadas": 260,
-    "acuracia": 0.9884615384615385,
+    "acuracia": 0.9846153846153847,
     "acuracia_por_cenario": {
       "desbalanceamento": 1.0,
       "desgaste_rolamento": 1.0,
       "queda_tensao": 1.0,
-      "sobrecarga": 0.9577464788732394
+      "sobrecarga": 0.9436619718309859
     }
   },
   "prognostico": {

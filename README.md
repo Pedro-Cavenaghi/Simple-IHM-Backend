@@ -72,6 +72,7 @@ flowchart LR
 
     subgraph Railway["☁️ Railway"]
         API["⚙️ FastAPI<br/>(Uvicorn + asyncpg)"]
+        ML["🧠 Monitor de ML<br/>(segundo plano)"]
         DB[("🐘 PostgreSQL")]
         FE["🖥️ Frontend React"]
     end
@@ -80,6 +81,9 @@ flowchart LR
     API -. "GET /dispositivos/maquinas<br/>(máquinas + manutenção)" .-> ESP
     API -- "INSERT log + UPSERT status<br/>(transação)" --> DB
     API -- "broadcast WebSocket" --> FE
+    API -- "cada leitura" --> ML
+    ML -- "alertas" --> DB
+    ML -- "/ws/alertas" --> FE
     FE -- "REST + JWT Bearer" --> API
 ```
 
@@ -89,6 +93,7 @@ flowchart LR
 2. O **Pydantic** valida os limites físicos (ex.: tensão entre 0 e 250 V, frequência entre 0 e 100 Hz, nenhum valor negativo).
 3. Em uma **única transação**, a API grava o registro histórico em `logs_maquinas` e atualiza o estado atual em `status_atual_maquinas` com um *upsert* (`ON CONFLICT`). O turno (1, 2 ou 3) é calculado automaticamente pelo horário.
 4. A leitura é enviada via **WebSocket** para todos os dashboards conectados àquela máquina.
+5. Depois da resposta à ESP32, o **monitor de machine learning** avalia a leitura em segundo plano e abre, atualiza ou encerra alertas (veja [Machine Learning](#-machine-learning)). A telemetria nunca espera nem depende do ML.
 
 ---
 
@@ -207,6 +212,18 @@ Outras práticas adotadas:
 </details>
 
 <details>
+<summary><b>🧠 Alertas de ML</b></summary>
+
+| Método | Rota | Acesso | Descrição |
+|---|---|---|---|
+| `GET` | `/alertas` | Todos | Alertas do mais recente ao mais antigo. Filtros: `maquina_id`, `apenas_abertos`, `limite` |
+| `GET` | `/alertas/{alerta_id}` | Todos | Detalhes de um alerta |
+| `PATCH` | `/alertas/{alerta_id}/reconhecer` | Todos | Registra quem viu o alerta (auditado). Responde `409` se já reconhecido |
+| `GET` | `/ml/status` | ADMIN | Se o modelo está carregado, suas métricas e o estado do monitor em cada máquina |
+
+</details>
+
+<details>
 <summary><b>🧾 Auditoria</b></summary>
 
 | Método | Rota | Acesso | Descrição |
@@ -241,6 +258,43 @@ Content-Type: application/json
 |---|---|
 | `ws://<host>/ws/telemetria/{maquina_id}?token=<JWT>` | Leituras de uma máquina específica |
 | `ws://<host>/ws/telemetria?token=<JWT>` | Leituras de todas as máquinas |
+| `ws://<host>/ws/alertas?token=<JWT>` | Mudanças nos alertas de machine learning |
+
+O canal de alertas é separado do de telemetria, então as mensagens que o dashboard já recebe não mudaram. Cada mensagem de `/ws/alertas` tem um `tipo` e o alerta completo (o mesmo formato de `GET /alertas/{id}`):
+
+```json
+{
+  "tipo": "alerta_atualizado",
+  "alerta": {
+    "id": 2,
+    "maquina_id": 1,
+    "tag_maquina": "INJ-01",
+    "nome_maquina": "Injetora Plastica",
+    "diagnostico": "desgaste_rolamento",
+    "confianca": 1.0,
+    "pontuacao": 0.21,
+    "severidade": "alta",
+    "mensagem": "Provável desgaste de rolamento (confiança de 100%). A vibração deve chegar ao limite (2× o normal) em ~1 min.",
+    "minutos_ate_limite": 1.2,
+    "criado_em": "2026-11-17T12:00:00Z",
+    "atualizado_em": "2026-11-17T12:00:30Z",
+    "encerrado_em": null,
+    "reconhecido_em": null,
+    "reconhecido_por": null,
+    "reconhecido_por_nome": null,
+    "manutencao_id": null
+  }
+}
+```
+
+| `tipo` | Quando |
+|---|---|
+| `alerta_criado` | A máquina saiu do padrão por 10 s seguidos. Nasce com `diagnostico: null` ("diagnóstico em andamento") |
+| `alerta_atualizado` | O diagnóstico apareceu ou mudou, ou a cada 30 s de anomalia (confiança e prognóstico atualizados) |
+| `alerta_encerrado` | A máquina voltou ao normal por 3 min, ou parou (`Inativa`/`Desligada`/`Manutenção`) |
+| `alerta_reconhecido` | Alguém chamou `PATCH /alertas/{id}/reconhecer` |
+
+`diagnostico` assume `desgaste_rolamento`, `sobrecarga`, `queda_tensao` ou `desbalanceamento`. `severidade` é `media` ou `alta` e nunca diminui enquanto o alerta está aberto. `minutos_ate_limite` só existe para desgaste (`0` = a vibração já passou do limite).
 
 O token é validado no handshake. Conexões sem token válido são fechadas com o código `1008` (*policy violation*). Conexões que caem são removidas automaticamente do gerenciador durante o broadcast.
 
@@ -255,6 +309,8 @@ erDiagram
     maquinas ||--o{ manutencao_preventiva : "recebe"
     funcionarios ||--o{ manutencao_preventiva : "executa"
     funcionarios ||--o{ audit_logs : "gera"
+    maquinas ||--o{ alertas : "gera"
+    funcionarios ||--o{ alertas : "reconhece"
 
     maquinas {
         int id PK
@@ -294,6 +350,16 @@ erDiagram
         int turno_trabalho
         timestamp deletado_em
     }
+    alertas {
+        int id PK
+        int maquina_id FK
+        varchar diagnostico
+        real confianca
+        varchar severidade
+        real minutos_ate_limite
+        timestamptz encerrado_em
+        int reconhecido_por FK
+    }
     audit_logs {
         int id PK
         int usuario_id FK
@@ -308,7 +374,9 @@ Destaques da modelagem (`database/schema.sql`):
 - **`status_atual_maquinas`** guarda uma linha por máquina, atualizada por *upsert* e configurada com `fillfactor=80` e autovacuum agressivo para suportar escritas constantes;
 - **`logs_maquinas`** é a série temporal, indexada por `(maquina_id, horario_do_log DESC)` para consultas rápidas de histórico;
 - **Constraints `CHECK`** garantem domínios válidos (status, turno, perfil e tipo de manutenção);
-- **Índices parciais** aceleram consultas de manutenções abertas e de registros ativos.
+- **Índices parciais** aceleram consultas de manutenções abertas e de registros ativos, e garantem **no máximo um alerta aberto por máquina**.
+
+**Migrações:** tabelas criadas depois do dump ficam em `database/migrations/` (hoje, `001_alertas.sql`). Elas são idempotentes (`IF NOT EXISTS`) e a **API as aplica sozinha a cada inicialização**, então um deploy novo no Railway cria o que falta sem passo manual. O `schema.sql` também as inclui, para bancos criados do zero.
 
 ---
 
@@ -449,15 +517,15 @@ Dataset gerado em 107.7s: ml/dados/dataset.csv
 
 ## 🧠 Machine Learning
 
-A pasta `ml/` treina os modelos que vão analisar a telemetria de cada máquina. O sistema responde três perguntas:
+A pasta `ml/` treina os modelos, e a API os aplica a **cada leitura recebida**, gerando alertas em tempo real. O sistema responde três perguntas:
 
 | Pergunta | Técnica | Resultado no teste |
 |---|---|---|
 | **Detecção:** está fora do padrão? | Isolation Forest, treinada só com operação normal | **99,6%** das falhas detectadas, atraso mediano de **12 s**, **0,66** alarme falso por máquina-dia |
-| **Diagnóstico:** que falha é? | Árvore de decisão (profundidade 6) | **98,8%** de acerto no tipo da falha |
+| **Diagnóstico:** que falha é? | Árvore de decisão (profundidade 6) | **98,5%** de acerto no tipo da falha |
 | **Prognóstico:** quando passa do limite? | Regressão linear com termo quadrático | Erro médio de **0,4 min** ao prever quando a vibração dobra |
 
-<sub>Avaliado em 2 sessões (261 falhas) que o modelo nunca viu no treino.</sub>
+<sub>Avaliado em 2 sessões (261 falhas) que o modelo nunca viu no treino, simulando exatamente as regras do monitor da API.</sub>
 
 <div align="center">
 <img src="ml/figuras/03_deteccao.png" alt="Detecção por tipo de falha e alarmes falsos" width="850">
@@ -467,7 +535,7 @@ A pasta `ml/` treina os modelos que vão analisar a telemetria de cada máquina.
 
 1. **Features de janela:** cada leitura vira 15 números calculados sobre os últimos 30 s e 3 min (desvio, ruído e tendência de tensão, corrente, potência, vibração e frequência), sempre **em relação à linha de base da própria máquina** (mediana dos últimos 30 min). Afinal, 5,8 g de vibração é normal numa injetora e alarmante numa prensa;
 2. **Detecção:** a Isolation Forest aprende como é o normal e estranha o resto, então também acusa falhas de tipos que nunca viu. Um alerta só é confirmado após **5 leituras seguidas (10 s)**. Comparada com limites fixos por feature (sem ML), detecta o mesmo e reduz os alarmes falsos de **26 para 0,66 por máquina-dia**;
-3. **Diagnóstico:** a árvore de decisão é legível. Dá para desenhar as regras e conferir que fazem sentido físico (por exemplo, o que separa uma sobrecarga de uma queda de tensão é a **potência**: sobe na primeira e quase não muda na segunda);
+3. **Diagnóstico:** a árvore de decisão é legível. Dá para desenhar as regras e conferir que fazem sentido físico (por exemplo, o que separa uma sobrecarga de uma queda de tensão é a **potência**: sobe na primeira e quase não muda na segunda). O diagnóstico do alerta é um **voto ponderado pela pontuação de anomalia**: o meio da falha pesa muito, e os minutos de transição depois dela pesam pouco. Com voto simples, a sobrecarga acertava só 24%;
 4. **Prognóstico:** no desgaste de rolamento, uma regressão sobre os últimos 3 min projeta quando a vibração vai chegar ao **dobro do normal**. O termo quadrático acompanha a aceleração do desgaste, e quando erra, erra para **mais cedo**, que é o lado seguro para agendar a manutenção.
 
 <div align="center">
@@ -485,7 +553,7 @@ python -m ml.treinar                # treina, avalia e salva o modelo
 ```
 Treinado em 14s → ml/modelos/modelo_falhas.joblib
 Detecção:    99.6% das 261 falhas de teste, atraso mediano 12s, 0.66 alarmes falsos por máquina-dia
-Diagnóstico: 98.8% de acerto em 260 falhas detectadas
+Diagnóstico: 98.5% de acerto em 260 falhas detectadas
 Prognóstico: erro médio de 0.4 min em 122 previsões de desgaste
 ```
 
@@ -493,12 +561,28 @@ O notebook **[`ml/analise.ipynb`](ml/analise.ipynb)** mostra o raciocínio compl
 
 | Arquivo | Papel |
 |---|---|
-| `ml/features.py` | Cálculo das features. **O mesmo código** será usado pela API, para o modelo ver em produção o que viu no treino |
+| `ml/features.py` | Cálculo das features. **O mesmo código** roda na API, para o modelo ver em produção o que viu no treino |
 | `ml/modelo.py` | Detector, diagnóstico e confirmação por persistência |
+| `ml/alertas.py` | Regras de abrir, diagnosticar e encerrar alertas, **as mesmas** no monitor da API e na avaliação |
 | `ml/tendencia.py` | Regressão do prognóstico |
 | `ml/avaliacao.py` | Métricas por ocorrência de falha (não por linha) |
 | `ml/treinar.py` | Pipeline de treino reprodutível |
 | `ml/modelos/` | Modelo treinado (`.joblib`) e métricas (`metricas.json`) |
+
+### Na API
+
+O monitor (`app/monitor.py`) roda a cada `POST /enviar-dados`, **depois** da resposta à ESP32:
+
+1. Guarda a leitura no histórico da máquina (só com a máquina `Ativa`) e calcula as features;
+2. **5 leituras anômalas seguidas (10 s)** abrem um alerta, que nasce como "diagnóstico em andamento";
+3. Após mais **5 leituras anômalas**, o diagnóstico aparece, e continua sendo votado enquanto o alerta está aberto. Para o desgaste, a regressão estima quando a vibração chega ao limite;
+4. **3 minutos normais** encerram o alerta. Com 1 minuto, o alerta fechava e reabria durante a transição, gerando duplicados.
+
+Cada mudança é gravada na tabela `alertas` e enviada pelo WebSocket `/ws/alertas`.
+
+- **Sem cegueira depois de um deploy:** na inicialização, o monitor recarrega os alertas abertos e os últimos 33 min de leituras de cada máquina. Sem isso, cada máquina precisaria de ~8 min de operação antes de ser avaliada;
+- **Isolado da telemetria:** se o modelo não carregar (ou `ML_HABILITADO=false`), o monitor fica desligado e a API segue normal. Um erro no ML nunca afeta a gravação das leituras;
+- **Configuração:** `ML_HABILITADO` (padrão `true`) e `ML_MODELO_PATH` (padrão `ml/modelos/modelo_falhas.joblib`). O estado pode ser conferido em `GET /ml/status`.
 
 > **Sobre os números:** os dados vêm do simulador, então as falhas seguem fórmulas que nós escrevemos. Para o resultado não ser só "o modelo decorou a fórmula", cada falha tem intensidade e duração sorteadas, e o teste usa sessões inteiras que o modelo nunca viu. Em dados reais o desempenho esperado é menor; o notebook discute as limitações.
 
@@ -510,8 +594,8 @@ Os testes ficam em `tests/`, divididos em três camadas:
 
 | Camada | Pasta | O que cobre |
 |---|---|---|
-| 🧩 Unitários | `tests/unit` | Autenticação, modelos, WebSocket manager, repositório com mocks, simulador (física, cenários, buffer e rótulos) e ML (features sem vazamento do futuro, regressão e treino completo) |
-| 🌐 API | `tests/api` | Rotas, login, RBAC, telemetria e WebSocket |
+| 🧩 Unitários | `tests/unit` | Autenticação, modelos, WebSocket manager, repositório com mocks, simulador (física, cenários, buffer e rótulos) ML (features sem vazamento do futuro, regressão e treino completo) e o monitor de alertas, inclusive **de ponta a ponta com o modelo treinado** em cada tipo de falha |
+| 🌐 API | `tests/api` | Rotas, login, RBAC, telemetria, alertas e WebSocket |
 | 🗄️ Integração | `tests/integration` | Repositório rodando contra um PostgreSQL real |
 
 ```bash
@@ -546,7 +630,9 @@ Simple-IHM-Backend/
 │   ├── repository.py         # Consultas SQL (asyncpg)
 │   ├── database.py           # Pool de conexões
 │   ├── dbconfig.py           # Configuração por variáveis de ambiente
-│   └── websocket_manager.py  # Gerenciador de conexões em tempo real
+│   ├── websocket_manager.py  # Gerenciador de conexões em tempo real
+│   ├── monitor.py            # Monitor de ML: alertas a cada leitura
+│   └── migracoes.py          # Aplica database/migrations na inicialização
 ├── simulador/
 │   ├── main.py               # Painel NiceGUI
 │   ├── estado.py             # Estado das máquinas e laço de envio
@@ -560,13 +646,15 @@ Simple-IHM-Backend/
 │   ├── features.py           # Features de janela (compartilhadas com a API)
 │   ├── modelo.py             # Detector, diagnóstico e persistência
 │   ├── tendencia.py          # Regressão do prognóstico
+│   ├── alertas.py            # Regras dos alertas (API e avaliação)
 │   ├── avaliacao.py          # Métricas por ocorrência de falha
 │   ├── treinar.py            # Pipeline de treino
 │   ├── analise.ipynb         # Notebook com a análise completa
 │   ├── figuras/              # Gráficos para a apresentação
 │   └── modelos/              # Modelo treinado e métricas
 ├── database/
-│   └── schema.sql            # Schema do PostgreSQL
+│   ├── schema.sql            # Schema do PostgreSQL
+│   └── migrations/           # Migrações aplicadas pela API
 ├── tests/
 │   ├── unit/
 │   ├── api/

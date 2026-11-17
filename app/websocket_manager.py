@@ -8,6 +8,8 @@ class ConnectionManager:
         self.global_connections: List[WebSocket] = []
         # Conexões por máquina específica: { maquina_id: [WebSocket, ...] }
         self.machine_connections: Dict[int, List[WebSocket]] = {}
+        # Conexões que recebem os alertas do machine learning
+        self.alert_connections: List[WebSocket] = []
 
     # --- Métodos Globais (Testes) ---
     async def connect_global(self, websocket: WebSocket):
@@ -53,6 +55,23 @@ class ConnectionManager:
                 await connection.send_json(data)
             except Exception:
                 self.disconnect_global(connection)
+
+    # --- Canal de alertas do machine learning (/ws/alertas) ---
+    # Separado da telemetria para não mudar as mensagens que o dashboard já recebe.
+    async def connect_alertas(self, websocket: WebSocket):
+        await websocket.accept()
+        self.alert_connections.append(websocket)
+
+    def disconnect_alertas(self, websocket: WebSocket):
+        if websocket in self.alert_connections:
+            self.alert_connections.remove(websocket)
+
+    async def broadcast_alertas(self, data: dict):
+        for connection in list(self.alert_connections):
+            try:
+                await connection.send_json(data)
+            except Exception:
+                self.disconnect_alertas(connection)
 
 
 # Instância global compartilhada

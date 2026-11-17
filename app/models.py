@@ -159,6 +159,32 @@ class MaquinaResponse(ResponseBase):
     data_cadastro: datetime
 
 
+class AlertaResponse(ResponseBase):
+    id: int
+    maquina_id: int
+    tag_maquina: str
+    nome_maquina: str
+    diagnostico: str | None = Field(
+        None, description="Falha mais provável (ex.: desgaste_rolamento)"
+    )
+    confianca: float | None = Field(
+        None, description="Fração das leituras do alerta que indicam o diagnóstico"
+    )
+    pontuacao: float = Field(description="Maior pontuação de anomalia (> 0 = anômalo)")
+    severidade: Literal["baixa", "media", "alta"]
+    mensagem: str
+    minutos_ate_limite: float | None = Field(
+        None, description="Prognóstico: minutos até a vibração atingir o limite"
+    )
+    criado_em: datetime
+    atualizado_em: datetime
+    encerrado_em: datetime | None
+    reconhecido_em: datetime | None
+    reconhecido_por: int | None
+    reconhecido_por_nome: str | None
+    manutencao_id: int | None
+
+
 class MaquinaDispositivoResponse(ResponseBase):
     id: int
     tag_maquina: str

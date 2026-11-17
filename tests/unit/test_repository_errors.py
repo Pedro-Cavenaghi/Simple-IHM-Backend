@@ -379,3 +379,40 @@ async def test_soft_delete_manutencao_trata_erro():
     resultado = await repository.soft_delete_manutencao(conn, 1)
 
     assert resultado is False
+
+
+# ==========================================
+# ALERTAS
+# ==========================================
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("funcao", "argumentos", "esperado"),
+    [
+        ("obter_alerta", (1,), None),
+        ("listar_alertas", (), []),
+        ("criar_alerta", ({"maquina_id": 1, "mensagem": "x"},), None),
+        ("atualizar_alerta", (1, {"mensagem": "x"}), None),
+        ("encerrar_alerta", (1,), None),
+        ("reconhecer_alerta", (1, 2), None),
+        ("buscar_leituras_recentes", (1, 10), []),
+    ],
+)
+async def test_funcoes_de_alerta_tratam_erro(funcao, argumentos, esperado):
+    conn = criar_conexao_mock()
+    for metodo in (conn.fetch, conn.fetchrow, conn.fetchval):
+        metodo.side_effect = Exception("Erro no banco")
+
+    assert await getattr(repository, funcao)(conn, *argumentos) == esperado
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("funcao", ["atualizar_alerta", "encerrar_alerta"])
+async def test_alerta_ja_encerrado_nao_e_alterado(funcao):
+    conn = criar_conexao_mock()
+    conn.fetchval.return_value = None
+    argumentos = (1, {"mensagem": "x"}) if funcao == "atualizar_alerta" else (1,)
+
+    assert await getattr(repository, funcao)(conn, *argumentos) is None
+    conn.fetchrow.assert_not_awaited()

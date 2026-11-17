@@ -8,6 +8,7 @@ detectada? Com quanta antecedência? Quantos alarmes falsos por dia?
 import numpy as np
 import pandas as pd
 
+from ml.alertas import LEITURAS_ENCERRAMENTO, VotacaoDiagnostico, simular_alertas
 from ml.features import (
     COLUNAS_FEATURES,
     JANELA_TENDENCIA,
@@ -164,30 +165,52 @@ def avaliar_deteccao(
 
 
 def avaliar_diagnostico(
-    dados: pd.DataFrame, alertas: np.ndarray, classes: np.ndarray
+    dados: pd.DataFrame,
+    pontuacoes: np.ndarray,
+    classes: np.ndarray,
+    leituras_confirmacao: int,
+    leituras_encerramento: int = LEITURAS_ENCERRAMENTO,
+    votacao=VotacaoDiagnostico,
 ) -> tuple[dict, pd.DataFrame]:
-    """Acerto do diagnóstico por falha detectada (voto da maioria durante o alerta)."""
-    alertas = np.asarray(alertas, dtype=bool)
+    """Acerto do diagnóstico por alerta, simulando o monitor da API.
+
+    Os alertas são abertos e encerrados com as mesmas regras do monitor
+    (ml/alertas.py), e o diagnóstico de cada um é o voto ponderado de todas as
+    leituras anômalas enquanto ele esteve aberto, inclusive na transição.
+    """
+    pontuacoes = np.asarray(pontuacoes, dtype=float)
     linhas = []
-    for evento, linhas_evento in dados[dados["evento"] >= 0].groupby("evento"):
-        indices = linhas_evento.index.to_numpy()
-        votos = classes[indices[alertas[indices]]]
-        if len(votos) == 0:
-            continue
-        valores, contagem = np.unique(votos, return_counts=True)
-        linhas.append(
-            {
-                "evento": evento,
-                "real": linhas_evento["cenario"].iat[0],
-                "previsto": valores[contagem.argmax()],
-            }
-        )
+    for indices in dados.groupby(["sessao", "maquina_id"], sort=False).indices.values():
+        for inicio, fim in simular_alertas(
+            pontuacoes[indices], leituras_confirmacao, leituras_encerramento
+        ):
+            trecho = indices[inicio : fim + 1]
+            urna = votacao()
+            for i in trecho:
+                urna.votar(classes[i], pontuacoes[i])
+            previsto, confianca = urna.resultado()
+
+            falhas = dados.loc[trecho, "cenario"]
+            falhas = falhas[falhas != NORMAL]
+            linhas.append(
+                {
+                    "real": falhas.mode().iat[0] if len(falhas) else NORMAL,
+                    "previsto": previsto,
+                    "confianca": confianca,
+                    "eventos": dados.loc[trecho, "evento"].pipe(
+                        lambda e: e[e >= 0].nunique()
+                    ),
+                }
+            )
     resultado = pd.DataFrame(linhas)
-    acerto = resultado["real"] == resultado["previsto"]
+    com_falha = resultado[resultado["real"] != NORMAL]
+    acerto = com_falha["real"] == com_falha["previsto"]
     resumo = {
-        "falhas_diagnosticadas": len(resultado),
+        "alertas": len(resultado),
+        "alertas_sem_falha": int((resultado["real"] == NORMAL).sum()),
+        "falhas_diagnosticadas": len(com_falha),
         "acuracia": float(acerto.mean()),
-        "acuracia_por_cenario": acerto.groupby(resultado["real"]).mean().to_dict(),
+        "acuracia_por_cenario": acerto.groupby(com_falha["real"]).mean().to_dict(),
     }
     return resumo, resultado
 
