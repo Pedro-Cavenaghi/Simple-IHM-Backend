@@ -36,6 +36,7 @@
 - [Tempo real com WebSocket](#-tempo-real-com-websocket)
 - [Banco de dados](#️-banco-de-dados)
 - [Simulador da ESP32](#-simulador-da-esp32)
+- [Machine Learning](#-machine-learning)
 - [Como executar](#-como-executar)
 - [Testes e CI](#-testes-e-ci)
 - [Estrutura do projeto](#-estrutura-do-projeto)
@@ -103,6 +104,7 @@ flowchart LR
 | **Autenticação** | JWT (python-jose) + bcrypt (passlib) |
 | **Tempo real** | WebSockets nativos do FastAPI |
 | **Simulador** | NiceGUI (painel web em Python) + httpx |
+| **Machine Learning** | scikit-learn, pandas, NumPy, Matplotlib, Jupyter |
 | **Qualidade** | Ruff (lint + format), pytest, pytest-asyncio, pytest-cov |
 | **Infraestrutura** | Docker, Docker Compose, GitHub Actions, Railway |
 
@@ -416,19 +418,20 @@ Acesse **http://localhost:8081**. O simulador lê o mesmo `.env` da raiz; as var
 Para treinar os modelos não é preciso deixar o painel rodando por horas. O gerador offline usa **o mesmo motor do painel** (física, cenários e coleta automática) com um relógio simulado: gera dias de operação em segundos, sem API e sem gravar nada no banco.
 
 ```bash
-python -m simulador.gerar_dataset --sessoes 6 --horas 4 --seed 42
+python -m simulador.gerar_dataset
 ```
 
 ```
-Dataset gerado em 25.2s: ml/dados/dataset.csv
-6 sessões × 4 h · 172800 leituras · 797 falhas disparadas
-  normal                 123739  (71.6%)
-  desgaste_rolamento      26895  (15.6%)
-  desbalanceamento        13167  (7.6%)
-  queda_tensao             5405  (3.1%)
-  sobrecarga               3594  (2.1%)
+Dataset gerado em 107.7s: ml/dados/dataset.csv
+6 sessões × 12 h · 518400 leituras · 764 falhas disparadas
+  normal                 467002  (90.1%)
+  desgaste_rolamento      30610  (5.9%)
+  desbalanceamento        12640  (2.4%)
+  queda_tensao             4878  (0.9%)
+  sobrecarga               3270  (0.6%)
 ```
 
+- No gerador, as falhas são **mais raras** (10 a 30 min de operação normal entre elas, ajustável com `--pausa-min` e `--pausa-max`) do que na coleta ao vivo do painel, como numa fábrica real. Falhas frequentes demais "contaminariam" a linha de base de 30 min usada pelo ML;
 - Cada **sessão** tem semente própria e fica num dia diferente, para que treino e teste sejam separados por sessão, e não por linhas sorteadas (linhas vizinhas são quase idênticas e vazariam de um lado para o outro);
 - A mesma `--seed` sempre gera o mesmo arquivo, então os experimentos são reprodutíveis;
 - O CSV tem as mesmas colunas do `rotulos.csv` do painel, e os dois podem ser combinados.
@@ -444,21 +447,78 @@ Dataset gerado em 25.2s: ml/dados/dataset.csv
 
 ---
 
+## 🧠 Machine Learning
+
+A pasta `ml/` treina os modelos que vão analisar a telemetria de cada máquina. O sistema responde três perguntas:
+
+| Pergunta | Técnica | Resultado no teste |
+|---|---|---|
+| **Detecção:** está fora do padrão? | Isolation Forest, treinada só com operação normal | **99,6%** das falhas detectadas, atraso mediano de **12 s**, **0,66** alarme falso por máquina-dia |
+| **Diagnóstico:** que falha é? | Árvore de decisão (profundidade 6) | **98,8%** de acerto no tipo da falha |
+| **Prognóstico:** quando passa do limite? | Regressão linear com termo quadrático | Erro médio de **0,4 min** ao prever quando a vibração dobra |
+
+<sub>Avaliado em 2 sessões (261 falhas) que o modelo nunca viu no treino.</sub>
+
+<div align="center">
+<img src="ml/figuras/03_deteccao.png" alt="Detecção por tipo de falha e alarmes falsos" width="850">
+</div>
+
+### Como funciona
+
+1. **Features de janela:** cada leitura vira 15 números calculados sobre os últimos 30 s e 3 min (desvio, ruído e tendência de tensão, corrente, potência, vibração e frequência), sempre **em relação à linha de base da própria máquina** (mediana dos últimos 30 min). Afinal, 5,8 g de vibração é normal numa injetora e alarmante numa prensa;
+2. **Detecção:** a Isolation Forest aprende como é o normal e estranha o resto, então também acusa falhas de tipos que nunca viu. Um alerta só é confirmado após **5 leituras seguidas (10 s)**. Comparada com limites fixos por feature (sem ML), detecta o mesmo e reduz os alarmes falsos de **26 para 0,66 por máquina-dia**;
+3. **Diagnóstico:** a árvore de decisão é legível. Dá para desenhar as regras e conferir que fazem sentido físico (por exemplo, o que separa uma sobrecarga de uma queda de tensão é a **potência**: sobe na primeira e quase não muda na segunda);
+4. **Prognóstico:** no desgaste de rolamento, uma regressão sobre os últimos 3 min projeta quando a vibração vai chegar ao **dobro do normal**. O termo quadrático acompanha a aceleração do desgaste, e quando erra, erra para **mais cedo**, que é o lado seguro para agendar a manutenção.
+
+<div align="center">
+<img src="ml/figuras/08_prognostico.png" alt="Prognóstico de um desgaste de rolamento" width="850">
+</div>
+
+### Executando
+
+```bash
+pip install -r ml/requirements.txt
+python -m simulador.gerar_dataset   # gera ml/dados/dataset.csv
+python -m ml.treinar                # treina, avalia e salva o modelo
+```
+
+```
+Treinado em 14s → ml/modelos/modelo_falhas.joblib
+Detecção:    99.6% das 261 falhas de teste, atraso mediano 12s, 0.66 alarmes falsos por máquina-dia
+Diagnóstico: 98.8% de acerto em 260 falhas detectadas
+Prognóstico: erro médio de 0.4 min em 122 previsões de desgaste
+```
+
+O notebook **[`ml/analise.ipynb`](ml/analise.ipynb)** mostra o raciocínio completo: exploração dos dados, comparação com a linha de base sem ML, o efeito da persistência, a árvore desenhada, as variações da regressão, a antecedência da detecção e as limitações. Os gráficos ficam em `ml/figuras/`, prontos para a apresentação.
+
+| Arquivo | Papel |
+|---|---|
+| `ml/features.py` | Cálculo das features. **O mesmo código** será usado pela API, para o modelo ver em produção o que viu no treino |
+| `ml/modelo.py` | Detector, diagnóstico e confirmação por persistência |
+| `ml/tendencia.py` | Regressão do prognóstico |
+| `ml/avaliacao.py` | Métricas por ocorrência de falha (não por linha) |
+| `ml/treinar.py` | Pipeline de treino reprodutível |
+| `ml/modelos/` | Modelo treinado (`.joblib`) e métricas (`metricas.json`) |
+
+> **Sobre os números:** os dados vêm do simulador, então as falhas seguem fórmulas que nós escrevemos. Para o resultado não ser só "o modelo decorou a fórmula", cada falha tem intensidade e duração sorteadas, e o teste usa sessões inteiras que o modelo nunca viu. Em dados reais o desempenho esperado é menor; o notebook discute as limitações.
+
+---
+
 ## 🧪 Testes e CI
 
 Os testes ficam em `tests/`, divididos em três camadas:
 
 | Camada | Pasta | O que cobre |
 |---|---|---|
-| 🧩 Unitários | `tests/unit` | Autenticação, modelos, WebSocket manager, repositório com mocks e simulador (física, cenários, buffer e rótulos) |
+| 🧩 Unitários | `tests/unit` | Autenticação, modelos, WebSocket manager, repositório com mocks, simulador (física, cenários, buffer e rótulos) e ML (features sem vazamento do futuro, regressão e treino completo) |
 | 🌐 API | `tests/api` | Rotas, login, RBAC, telemetria e WebSocket |
 | 🗄️ Integração | `tests/integration` | Repositório rodando contra um PostgreSQL real |
 
 ```bash
-pip install -r requirements-dev.txt
+pip install -r requirements-dev.txt -r ml/requirements.txt
 
 # Unitários + API, com cobertura
-pytest tests/unit tests/api --cov=app --cov=simulador --cov-report=term-missing
+pytest tests/unit tests/api --cov=app --cov=simulador --cov=ml --cov-report=term-missing
 
 # Integração (exige um PostgreSQL com o schema aplicado)
 pytest tests/integration
@@ -496,6 +556,15 @@ Simple-IHM-Backend/
 │   ├── coleta.py             # Coleta automática de falhas variadas
 │   ├── gerar_dataset.py      # Gerador offline do dataset de treino
 │   └── Dockerfile
+├── ml/
+│   ├── features.py           # Features de janela (compartilhadas com a API)
+│   ├── modelo.py             # Detector, diagnóstico e persistência
+│   ├── tendencia.py          # Regressão do prognóstico
+│   ├── avaliacao.py          # Métricas por ocorrência de falha
+│   ├── treinar.py            # Pipeline de treino
+│   ├── analise.ipynb         # Notebook com a análise completa
+│   ├── figuras/              # Gráficos para a apresentação
+│   └── modelos/              # Modelo treinado e métricas
 ├── database/
 │   └── schema.sql            # Schema do PostgreSQL
 ├── tests/

@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from simulador.cliente_api import ClienteAPI, ResultadoEnvio
-from simulador.coleta import ColetaAutomatica
+from simulador.coleta import ColetaAutomatica, ConfigColeta
 from simulador.fisica import (
     CENARIOS,
     STATUS_MANUTENCAO,
@@ -158,6 +158,7 @@ class Simulador:
         relogio: Callable[[], float] = time.monotonic,
         enviar_por_padrao: bool = True,
         relogio_parede: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+        config_coleta: ConfigColeta = ConfigColeta(),
     ):
         self.cliente = cliente
         self.gravador = gravador
@@ -167,7 +168,7 @@ class Simulador:
         self.relogio = relogio
         # Data e hora gravadas no CSV (o gerador offline usa um relógio simulado)
         self.relogio_parede = relogio_parede
-        self.coleta = ColetaAutomatica(self.rng)
+        self.coleta = ColetaAutomatica(self.rng, config_coleta)
         self.maquinas: dict[int, EstadoMaquina] = {}
         self.ultima_sincronizacao: float | None = None
         # Vale para as máquinas que ainda vão aparecer na sincronização
