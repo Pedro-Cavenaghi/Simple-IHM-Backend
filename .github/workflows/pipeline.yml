@@ -32,7 +32,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v7
         with:
-          python-version: "3.11"
+          python-version: "3.13"
           cache: "pip"
           cache-dependency-path: requirements-dev.txt
 
@@ -42,13 +42,13 @@ jobs:
           python -m pip install -r requirements-dev.txt
 
       - name: Check syntax
-        run: python -m compileall app simulador
+        run: python -m compileall app simulador ml
 
       - name: Ruff lint
-        run: ruff check app simulador
+        run: ruff check app simulador ml
 
       - name: Ruff format
-        run: ruff format --check app simulador
+        run: ruff format --check app simulador ml
 
 
   compatibility:
@@ -70,7 +70,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v7
         with:
-          python-version: "3.11"
+          python-version: "3.13"
           cache: "pip"
           cache-dependency-path: requirements.txt
 
@@ -100,22 +100,26 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v7
         with:
-          python-version: "3.11"
+          python-version: "3.13"
           cache: "pip"
           cache-dependency-path: |
             requirements.txt
             requirements-dev.txt
+            ml/requirements.txt
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
           python -m pip install -r requirements-dev.txt
+          python -m pip install -r ml/requirements.txt
 
       - name: Run automated tests
         run: |
           python -m pytest tests/unit tests/api -v \
             --cov=app \
+            --cov=simulador \
+            --cov=ml \
             --cov-report=term-missing \
             --cov-report=xml
 
@@ -156,7 +160,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v7
         with:
-          python-version: "3.11"
+          python-version: "3.13"
           cache: "pip"
           cache-dependency-path: |
             requirements.txt

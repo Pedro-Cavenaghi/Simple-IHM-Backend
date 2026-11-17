@@ -1,0 +1,75 @@
+{
+  "deteccao": {
+    "falhas": 261,
+    "taxa_deteccao": 0.9961685823754789,
+    "atraso_mediano_s": 12.0,
+    "alarmes_falsos": 2,
+    "alarmes_falsos_por_maquina_dia": 0.6619725863667358,
+    "por_cenario": {
+      "desbalanceamento": {
+        "falhas": 60,
+        "taxa_deteccao": 1.0,
+        "atraso_mediano_s": 21.0,
+        "progresso_mediano_na_deteccao": 0.17615
+      },
+      "desgaste_rolamento": {
+        "falhas": 62,
+        "taxa_deteccao": 0.9838709677419355,
+        "atraso_mediano_s": 86.0,
+        "progresso_mediano_na_deteccao": 0.2556
+      },
+      "queda_tensao": {
+        "falhas": 68,
+        "taxa_deteccao": 1.0,
+        "atraso_mediano_s": 10.0,
+        "progresso_mediano_na_deteccao": 0.2096
+      },
+      "sobrecarga": {
+        "falhas": 71,
+        "taxa_deteccao": 1.0,
+        "atraso_mediano_s": 10.0,
+        "progresso_mediano_na_deteccao": 0.3351
+      }
+    }
+  },
+  "diagnostico": {
+    "falhas_diagnosticadas": 260,
+    "acuracia": 0.9884615384615385,
+    "acuracia_por_cenario": {
+      "desbalanceamento": 1.0,
+      "desgaste_rolamento": 1.0,
+      "queda_tensao": 1.0,
+      "sobrecarga": 0.9577464788732394
+    }
+  },
+  "prognostico": {
+    "previsoes": 122,
+    "sem_tendencia_detectada": 1,
+    "erro_absoluto_medio_min": 0.4132838086533845,
+    "erro_medio_min": -0.3458465773491373,
+    "por_marco": {
+      "0.25": {
+        "erro_absoluto_medio_min": 0.4438246140078005,
+        "tempo_real_mediano_min": 1.8
+      },
+      "0.5": {
+        "erro_absoluto_medio_min": 0.3822339898763952,
+        "tempo_real_mediano_min": 1.0666666666666667
+      }
+    }
+  },
+  "dados": {
+    "sessoes_treino": [
+      "offline-s42-01",
+      "offline-s42-02",
+      "offline-s42-03",
+      "offline-s42-04"
+    ],
+    "sessoes_teste": [
+      "offline-s42-05",
+      "offline-s42-06"
+    ],
+    "linhas_treino_detector": 262290,
+    "linhas_treino_diagnostico": 27005
+  }
+}
