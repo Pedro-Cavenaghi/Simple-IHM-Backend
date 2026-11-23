@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi import status
@@ -169,8 +169,8 @@ async def test_enviar_dados_agenda_o_monitor(client, monkeypatch):
         main_module.repository, "salvar_leitura", AsyncMock(return_value=True)
     )
     monkeypatch.setattr(main_module.manager, "broadcast", AsyncMock())
-    processar = AsyncMock()
-    monkeypatch.setattr(main_module.monitor, "processar", processar)
+    agendar = Mock()
+    monkeypatch.setattr(main_module.monitor, "agendar", agendar)
     leitura = {
         "maquina_id": 1,
         "vibracao_rms": 1.5,
@@ -186,7 +186,29 @@ async def test_enviar_dados_agenda_o_monitor(client, monkeypatch):
     )
 
     assert response.status_code == 200
-    processar.assert_awaited_once_with(leitura)
+    agendar.assert_called_once_with(leitura)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("valor", ["Infinity", "-Infinity", "NaN"])
+async def test_enviar_dados_rejeita_valor_nao_finito(client, monkeypatch, valor):
+    salvar = AsyncMock(return_value=True)
+    monkeypatch.setattr(main_module.repository, "salvar_leitura", salvar)
+    corpo = (
+        '{"maquina_id":1,"vibracao_rms":' + valor + ',"corrente_ampere":10,'
+        '"tensao_volt":220,"potencia_watt":2000,"frequencia_hz":60,'
+        '"status_atual":"Ativa"}'
+    )
+
+    response = await client.post(
+        "/enviar-dados",
+        content=corpo,
+        headers={"X-API-Key": auth.API_KEY, "Content-Type": "application/json"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", "vibracao_rms"]
+    salvar.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -1,4 +1,5 @@
 import asyncio
+import json
 import random
 from itertools import count
 
@@ -119,7 +120,10 @@ def test_sem_modelo_o_monitor_nao_faz_nada():
 
     assert m.habilitado is False
     assert eventos == []
-    assert m.status() == {"habilitado": False, "maquinas": []}
+    status = m.status()
+    assert status["habilitado"] is False
+    assert status["maquinas"] == []
+    assert "aviso" in status
 
 
 def test_alerta_so_abre_apos_anomalias_seguidas(monitor_falso):
@@ -223,6 +227,193 @@ def test_iniciar_recupera_alertas_abertos_e_historico():
     assert status[1]["aquecida"] is True
     assert status[2]["alerta_aberto_id"] == 7
     assert m.status()["modelo"]["taxa_deteccao"] == 0.99
+
+
+# ---------- fila de processamento ----------
+
+
+def test_agendar_nao_bloqueia_e_mantem_a_ordem(monitor_falso):
+    m, _ = monitor_falso
+
+    async def rodar():
+        for vibracao in (1.0, 2.0, 3.0):
+            m.agendar(leitura(vibracao))
+        # Devolve o controle na hora: a requisição não espera o ML
+        assert len(m.estados.get(1, EstadoMaquina(historico=[])).historico) == 0
+        await asyncio.gather(*m._tarefas)
+
+    asyncio.run(rodar())
+
+    assert [i["vibracao_rms"] for i in m.estados[1].historico] == [1.0, 2.0, 3.0]
+    assert not m._tarefas
+
+
+def test_agendar_sem_modelo_nao_cria_tarefa():
+    m, _ = criar_monitor()
+
+    async def rodar():
+        await m.iniciar(None)
+        m.agendar(leitura())
+        assert not m._tarefas
+
+    asyncio.run(rodar())
+
+
+def test_parar_cancela_a_fila(monitor_falso, monkeypatch):
+    m, eventos = monitor_falso
+
+    async def travar(*_):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(m, "processar", travar)
+
+    async def rodar():
+        m.agendar(leitura())
+        await asyncio.sleep(0)
+        await m.parar()
+        await asyncio.sleep(0)
+        assert not m._tarefas
+
+    asyncio.run(rodar())
+    assert eventos == []
+
+
+# ---------- linha de base congelada ----------
+
+BASE = {
+    "tensao_volt": 220.0,
+    "corrente_ampere": 15.0,
+    "potencia_watt": 2805.0,
+    "vibracao_rms": 2.0,
+    "frequencia_hz": 60.0,
+}
+
+
+@pytest.fixture
+def monitor_com_base(monkeypatch):
+    m, eventos = criar_monitor(leituras_encerramento=4, intervalo_atualizacao=2)
+    asyncio.run(m.iniciar(ModeloFalso()))
+    bases_usadas = []
+
+    def avaliar(historico, base=None):
+        bases_usadas.append(base)
+        return avaliacao_por_vibracao(historico)
+
+    monkeypatch.setattr(m, "avaliar", avaliar)
+    monkeypatch.setattr(m, "_linha_de_base", lambda historico: dict(BASE))
+    return m, eventos, bases_usadas
+
+
+def test_alerta_congela_a_base_e_a_grava(monitor_com_base):
+    m, eventos, bases = monitor_com_base
+    processar(m, *[leitura() for _ in range(5)], *[leitura(9) for _ in range(3)])
+    assert bases[-1] is None
+
+    processar(m, leitura(9))
+
+    assert bases[-1] == BASE
+    assert eventos[0][1]["linha_de_base"] == BASE
+
+
+def test_encerrar_tira_a_falha_do_historico(monitor_com_base, monkeypatch):
+    m, _, _ = monitor_com_base
+    monkeypatch.setattr(monitor_module, "JANELA_TENDENCIA", 3)
+    processar(m, *[leitura() for _ in range(100)], *[leitura(9) for _ in range(30)])
+
+    processar(m, *[leitura() for _ in range(4)])
+
+    estado = m.estados[1]
+    assert estado.alerta is None
+    assert estado.base_congelada is None
+    assert all(item["vibracao_rms"] == 2.0 for item in estado.historico)
+
+
+def test_alerta_nao_encerra_com_sinal_fora_da_faixa(monitor_com_base, monkeypatch):
+    m, eventos, _ = monitor_com_base
+
+    def avaliar(historico, base=None):
+        vibracao = historico[-1]["vibracao_rms"]
+        anomalo = vibracao > 5
+        return Avaliacao(
+            anomalo,
+            1.0 if anomalo else -1.0,
+            "sobrecarga",
+            0.9,
+            None,
+            fora_da_faixa=base is not None and vibracao > 3,
+        )
+
+    monkeypatch.setattr(m, "avaliar", avaliar)
+    processar(m, *[leitura() for _ in range(5)], *[leitura(9) for _ in range(3)])
+
+    # O detector não vê anomalia, mas a vibração segue acima da faixa
+    processar(m, *[leitura(4) for _ in range(20)])
+    assert m.estados[1].alerta is not None
+
+    processar(m, *[leitura() for _ in range(4)])
+    assert m.estados[1].alerta is None
+    assert eventos[-1][0] == "alerta_encerrado"
+
+
+def test_manutencao_encerra_alerta_e_reinicia_o_historico(monitor_com_base):
+    m, eventos, _ = monitor_com_base
+    processar(m, *[leitura() for _ in range(5)], *[leitura(9) for _ in range(3)])
+
+    processar(m, leitura(status="Manutenção"))
+
+    assert eventos[-1][0] == "alerta_encerrado"
+    assert len(m.estados[1].historico) == 0
+    assert m.estados[1].base_congelada is None
+
+
+def test_reiniciar_ao_concluir_manutencao(monitor_com_base):
+    m, eventos, _ = monitor_com_base
+    processar(m, *[leitura() for _ in range(5)], *[leitura(9) for _ in range(3)])
+
+    asyncio.run(m.reiniciar_linha_de_base(1))
+
+    assert eventos[-1][0] == "alerta_encerrado"
+    assert len(m.estados[1].historico) == 0
+
+
+def test_rejeicao_de_outro_diagnostico_nao_reinicia(monitor_com_base):
+    m, eventos, _ = monitor_com_base
+    processar(m, *[leitura() for _ in range(5)], *[leitura(9) for _ in range(8)])
+    assert m.estados[1].alerta["diagnostico"] == "sobrecarga"
+
+    asyncio.run(m.reiniciar_linha_de_base(1, apenas_diagnostico="queda_tensao"))
+    assert m.estados[1].alerta is not None
+
+    asyncio.run(m.reiniciar_linha_de_base(1, apenas_diagnostico="sobrecarga"))
+    assert m.estados[1].alerta is None
+    assert eventos[-1][0] == "alerta_encerrado"
+
+
+def test_reiniciar_maquina_desconhecida_nao_faz_nada(monitor_com_base):
+    m, eventos, _ = monitor_com_base
+
+    asyncio.run(m.reiniciar_linha_de_base(99))
+
+    assert eventos == []
+
+
+def test_iniciar_recupera_a_base_gravada_como_texto():
+    armazenamento = ArmazenamentoMemoria(
+        abertos=[
+            {
+                "id": 7,
+                "maquina_id": 1,
+                "diagnostico": "sobrecarga",
+                "pontuacao": 0.3,
+                "linha_de_base": json.dumps(BASE),
+            }
+        ],
+    )
+    m, _ = criar_monitor(armazenamento)
+
+    asyncio.run(m.iniciar(ModeloFalso()))
+
+    assert m.estados[1].base_congelada == BASE
 
 
 def avaliacao_desgaste(minutos):

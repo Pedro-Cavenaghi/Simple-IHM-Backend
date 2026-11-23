@@ -15,6 +15,7 @@ funcionando normalmente: a telemetria nunca depende do ML.
 """
 
 import asyncio
+import json
 import os
 from collections import deque
 from collections.abc import Awaitable, Callable
@@ -24,7 +25,12 @@ from typing import Protocol
 
 from app import repository
 from ml.alertas import LEITURAS_ENCERRAMENTO, VotacaoDiagnostico
-from ml.features import LEITURAS_AQUECIMENTO, SINAIS, TAMANHO_HISTORICO
+from ml.features import (
+    JANELA_TENDENCIA,
+    LEITURAS_AQUECIMENTO,
+    SINAIS,
+    TAMANHO_HISTORICO,
+)
 
 RAIZ = Path(__file__).resolve().parent.parent
 CAMINHO_MODELO = Path(
@@ -56,6 +62,13 @@ NOMES_FALHAS = {
 }
 # Falhas elétricas podem danificar o motor rapidamente
 FALHAS_ALTA_SEVERIDADE = {"sobrecarga", "queda_tensao"}
+# Serviço sugerido na solicitação de manutenção preditiva
+ACOES_MANUTENCAO = {
+    "desgaste_rolamento": "Inspecionar e lubrificar os rolamentos; trocar se necessário.",
+    "sobrecarga": "Verificar a carga mecânica, a corrente do motor e a proteção térmica.",
+    "queda_tensao": "Verificar a alimentação elétrica, os cabos e as conexões.",
+    "desbalanceamento": "Verificar o balanceamento, o alinhamento e a fixação do conjunto.",
+}
 
 
 @dataclass(frozen=True)
@@ -65,6 +78,8 @@ class Avaliacao:
     diagnostico: str
     probabilidade: float
     minutos_ate_limite: float | None
+    # Com o alerta aberto: algum sinal segue fora da faixa da referência
+    fora_da_faixa: bool = False
 
 
 @dataclass
@@ -81,10 +96,16 @@ class EstadoMaquina:
     # O desgaste já levou a vibração ao limite neste alerta
     limite_atingido: bool = False
     ultima_avaliacao: Avaliacao | None = None
+    # Referência congelada enquanto o alerta está aberto
+    base_congelada: dict[str, float] | None = None
+    # Leituras anteriores à falha, que voltam ao histórico quando o alerta encerra
+    historico_limpo: list[dict] | None = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     def limpar_alerta(self) -> None:
         self.alerta = None
+        self.base_congelada = None
+        self.historico_limpo = None
         self.votacao = VotacaoDiagnostico()
         self.pontuacao_maxima = 0.0
         self.leituras_anomalas_no_alerta = 0
@@ -136,22 +157,49 @@ def descrever(
     return texto
 
 
+# Problema encontrado na última tentativa de carregar o modelo
+aviso_modelo: str | None = None
+
+
+def descrever_manutencao(diagnostico: str | None) -> str | None:
+    """Serviço proposto ao analista. None enquanto não há diagnóstico."""
+    if diagnostico not in ACOES_MANUTENCAO:
+        return None
+    return (
+        f"Manutenção preditiva por provável {NOMES_FALHAS[diagnostico]}: "
+        f"{ACOES_MANUTENCAO[diagnostico]}"
+    )
+
+
 def carregar_modelo(caminho: Path = CAMINHO_MODELO):
-    """Carrega o ModeloFalhas, ou retorna None (com o motivo no log) se não der."""
+    """Carrega o ModeloFalhas, ou retorna None se não der.
+
+    O motivo de um desligamento, ou de uma versão incompatível, fica em
+    `aviso_modelo` e aparece em GET /ml/status.
+    """
+    global aviso_modelo
+    aviso_modelo = None
     if not ML_HABILITADO:
-        print("--- Monitor de ML desligado (ML_HABILITADO=false) ---")
+        aviso_modelo = "Monitor de ML desligado (ML_HABILITADO=false)"
+        print(f"--- {aviso_modelo} ---")
         return None
     try:
+        import sklearn
+
         from ml.modelo import ModeloFalhas
 
         modelo = ModeloFalhas.carregar(caminho)
         print(f"--- Modelo de ML carregado (treinado em {modelo.treinado_em}) ---")
+        if modelo.versao_sklearn != sklearn.__version__:
+            aviso_modelo = (
+                f"Modelo treinado com scikit-learn {modelo.versao_sklearn}, mas a API"
+                f" usa {sklearn.__version__}. Retreine com python -m ml.treinar."
+            )
+            print(f"--- AVISO: {aviso_modelo} ---")
         return modelo
     except Exception as erro:
-        print(
-            "--- Monitor de ML desligado: não foi possível carregar o modelo"
-            f" ({erro}) ---"
-        )
+        aviso_modelo = f"Monitor de ML desligado: modelo não carregado ({erro})"
+        print(f"--- ERRO: {aviso_modelo} ---")
         return None
 
 
@@ -169,6 +217,7 @@ class MonitorFalhas:
         self.intervalo_atualizacao = intervalo_atualizacao
         self.modelo = None
         self.estados: dict[int, EstadoMaquina] = {}
+        self._tarefas: set[asyncio.Task] = set()
 
     @property
     def habilitado(self) -> bool:
@@ -207,16 +256,40 @@ class MonitorFalhas:
             )
             self._estado(maquina_id).historico.extend(leituras)
 
+        for estado in self.estados.values():
+            if estado.alerta:
+                historico = list(estado.historico)
+                base = estado.alerta.get("linha_de_base")
+                # O asyncpg devolve jsonb como texto
+                base = json.loads(base) if isinstance(base, str) else base
+                estado.base_congelada = base or self._linha_de_base(historico)
+                if estado.base_congelada:
+                    estado.historico_limpo = historico
+
     # ---------- avaliação (CPU, roda numa thread) ----------
 
-    def avaliar(self, historico: list[dict]) -> Avaliacao | None:
+    @staticmethod
+    def _linha_de_base(historico: list[dict]) -> dict[str, float] | None:
+        if len(historico) < LEITURAS_AQUECIMENTO:
+            return None
+
         import pandas as pd
 
+        from ml.features import linhas_de_base_atuais
+
+        return linhas_de_base_atuais(pd.DataFrame(historico, columns=list(SINAIS)))
+
+    def avaliar(
+        self, historico: list[dict], base_fixa: dict[str, float] | None = None
+    ) -> Avaliacao | None:
+        import pandas as pd
+
+        from ml.alertas import fora_da_faixa
         from ml.features import calcular_features, vibracao_relativa
         from ml.tendencia import JANELA_PADRAO, minutos_ate_limite
 
         leituras = pd.DataFrame(historico, columns=list(SINAIS))
-        features = calcular_features(leituras).iloc[[-1]]
+        features = calcular_features(leituras, base_fixa).iloc[[-1]]
         if features.isna().any(axis=None):
             return None
 
@@ -226,7 +299,7 @@ class MonitorFalhas:
 
         minutos = None
         if diagnostico == "desgaste_rolamento":
-            serie = vibracao_relativa(leituras).to_numpy()[-JANELA_PADRAO:]
+            serie = vibracao_relativa(leituras, base_fixa).to_numpy()[-JANELA_PADRAO:]
             minutos = minutos_ate_limite(serie, self.modelo.limite_vibracao)
 
         return Avaliacao(
@@ -235,9 +308,25 @@ class MonitorFalhas:
             diagnostico=diagnostico,
             probabilidade=float(probabilidades[0]),
             minutos_ate_limite=minutos,
+            fora_da_faixa=base_fixa is not None and bool(fora_da_faixa(features)[0]),
         )
 
     # ---------- processamento de cada leitura ----------
+
+    def agendar(self, leitura: dict) -> None:
+        """Processa a leitura sem prender a requisição nem sua conexão do banco."""
+        if not self.habilitado:
+            return
+        tarefa = asyncio.create_task(self.processar(leitura))
+        self._tarefas.add(tarefa)
+        tarefa.add_done_callback(self._tarefas.discard)
+
+    async def parar(self) -> None:
+        """Cancela as leituras na fila antes de o pool de conexões fechar."""
+        tarefas = list(self._tarefas)
+        for tarefa in tarefas:
+            tarefa.cancel()
+        await asyncio.gather(*tarefas, return_exceptions=True)
 
     async def processar(self, leitura: dict) -> None:
         """Nunca levanta exceção: um erro no ML não pode afetar a telemetria."""
@@ -252,16 +341,57 @@ class MonitorFalhas:
                 f"Erro no monitor de ML (máquina {leitura.get('maquina_id')}): {erro}"
             )
 
+    async def reiniciar_linha_de_base(
+        self, maquina_id: int, apenas_diagnostico: str | None = None
+    ) -> None:
+        """Esquece a referência da máquina depois de uma intervenção humana.
+
+        Com `apenas_diagnostico`, só age se o alerta aberto tem esse diagnóstico
+        (usado quando a solicitação é rejeitada: o nível atual é o novo normal).
+        Nunca levanta exceção: a ação do usuário já foi gravada.
+        """
+        if not self.habilitado or maquina_id not in self.estados:
+            return
+        estado = self.estados[maquina_id]
+        try:
+            async with estado.lock:
+                if apenas_diagnostico is not None and (
+                    not estado.alerta
+                    or estado.alerta.get("diagnostico") != apenas_diagnostico
+                ):
+                    return
+                await self._reiniciar(estado)
+        except Exception as erro:
+            print(f"Erro ao reiniciar a linha de base da máquina {maquina_id}: {erro}")
+
+    async def _reiniciar(self, estado: EstadoMaquina) -> None:
+        estado.anomalias_seguidas = estado.normais_seguidas = 0
+        if estado.alerta:
+            await self._encerrar(estado, manter_recentes=0)
+        estado.historico.clear()
+        estado.ultima_avaliacao = None
+
     async def _processar(self, maquina_id: int, estado: EstadoMaquina, leitura: dict):
-        if leitura.get("status_atual") != "Ativa":
+        status_atual = leitura.get("status_atual")
+        if status_atual == "Manutenção":
+            # Depois do serviço, o comportamento saudável pode ser outro
+            await self._reiniciar(estado)
+            return
+        if status_atual != "Ativa":
             # Máquina parada: não há comportamento a avaliar
             estado.anomalias_seguidas = estado.normais_seguidas = 0
             if estado.alerta:
-                await self._encerrar(estado)
+                await self._encerrar(estado, manter_recentes=0)
             return
 
         estado.historico.append({sinal: float(leitura[sinal]) for sinal in SINAIS})
-        avaliacao = await asyncio.to_thread(self.avaliar, list(estado.historico))
+        historico = list(estado.historico)
+        if estado.base_congelada is None:
+            avaliacao = await asyncio.to_thread(self.avaliar, historico)
+        else:
+            avaliacao = await asyncio.to_thread(
+                self.avaliar, historico, estado.base_congelada
+            )
         estado.ultima_avaliacao = avaliacao
         if avaliacao is None:  # ainda aquecendo a linha de base
             return
@@ -269,6 +399,8 @@ class MonitorFalhas:
         if avaliacao.anomalo:
             estado.anomalias_seguidas += 1
             estado.normais_seguidas = 0
+        elif avaliacao.fora_da_faixa:
+            estado.anomalias_seguidas = estado.normais_seguidas = 0
         else:
             estado.normais_seguidas += 1
             estado.anomalias_seguidas = 0
@@ -323,17 +455,25 @@ class MonitorFalhas:
             "severidade": severidade,
             "mensagem": descrever(diagnostico, confianca, minutos),
             "minutos_ate_limite": None if minutos is None else round(minutos, 1),
+            "manutencao_descricao": descrever_manutencao(diagnostico),
         }
 
     async def _abrir(self, maquina_id: int, estado: EstadoMaquina, avaliacao):
         estado.limpar_alerta()
         self._votar(estado, avaliacao)
-        alerta = await self.armazenamento.criar_alerta(
-            self._dados_alerta(maquina_id, estado, avaliacao)
-        )
+        historico = list(estado.historico)
+        base = await asyncio.to_thread(self._linha_de_base, historico)
+        dados = self._dados_alerta(maquina_id, estado, avaliacao)
+        alerta = await self.armazenamento.criar_alerta({**dados, "linha_de_base": base})
         if alerta:
             estado.alerta = alerta
+            if base:
+                estado.base_congelada = base
+                # Os últimos 3 min ficam fora da base e podem já conter a falha
+                estado.historico_limpo = historico[:-JANELA_TENDENCIA]
             await self.notificar("alerta_criado", alerta)
+        else:
+            estado.limpar_alerta()
 
     async def _atualizar(self, maquina_id: int, estado: EstadoMaquina, avaliacao):
         alerta = await self.armazenamento.atualizar_alerta(
@@ -343,8 +483,22 @@ class MonitorFalhas:
             estado.alerta = alerta
             await self.notificar("alerta_atualizado", alerta)
 
-    async def _encerrar(self, estado: EstadoMaquina):
+    async def _encerrar(
+        self, estado: EstadoMaquina, manter_recentes: int | None = None
+    ):
+        """Encerra o alerta e tira as leituras da falha do histórico.
+
+        `manter_recentes` são as últimas leituras já normais que continuam nele.
+        """
         alerta = await self.armazenamento.encerrar_alerta(estado.alerta["id"])
+        if estado.base_congelada is not None:
+            if manter_recentes is None:
+                manter_recentes = self.leituras_encerramento
+            recentes = (
+                list(estado.historico)[-manter_recentes:] if manter_recentes else []
+            )
+            estado.historico.clear()
+            estado.historico.extend((estado.historico_limpo or []) + recentes)
         estado.limpar_alerta()
         if alerta:
             await self.notificar("alerta_encerrado", alerta)
@@ -370,7 +524,11 @@ class MonitorFalhas:
                     ),
                 }
             )
-        resposta = {"habilitado": self.habilitado, "maquinas": maquinas}
+        resposta = {
+            "habilitado": self.habilitado,
+            "aviso": aviso_modelo,
+            "maquinas": maquinas,
+        }
         if self.habilitado:
             deteccao = self.modelo.metricas.get("deteccao", {})
             diagnostico = self.modelo.metricas.get("diagnostico", {})

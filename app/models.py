@@ -1,8 +1,15 @@
 # Teste 1
 from enum import Enum
-from pydantic import BaseModel, Field, EmailStr, ConfigDict
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    StringConstraints,
+    field_validator,
+)
 from datetime import datetime, date
-from typing import Literal
+from typing import Annotated, Literal
 
 # ==========================================
 # CONFIGURAÇÃO BASE DO MODELO Pydantic / ORM
@@ -44,6 +51,9 @@ class AuditLogResponse(BaseModel):
 
 
 class LeituraSensor(BaseModel):
+    # Infinity e NaN passam no JSON do Python e cegariam o monitor de ML
+    model_config = ConfigDict(allow_inf_nan=False)
+
     maquina_id: int = Field(gt=0, description="O ID deve ser maior que 0")
     vibracao_rms: float = Field(ge=0.0, description="Vibração não pode ser negativa")
     corrente_ampere: float = Field(ge=0.0, description="Corrente não pode ser negativa")
@@ -183,6 +193,38 @@ class AlertaResponse(ResponseBase):
     reconhecido_por: int | None
     reconhecido_por_nome: str | None
     manutencao_id: int | None
+    manutencao_status: Literal["pendente", "aprovada", "rejeitada"] | None = Field(
+        None, description="Solicitação de manutenção preditiva gerada pelo alerta"
+    )
+    manutencao_descricao: str | None = None
+    manutencao_data_sugerida: date | None = None
+    analisado_por: int | None = None
+    analisado_por_nome: str | None = None
+    analisado_em: datetime | None = None
+    analise_observacao: str | None = None
+
+
+class AprovarManutencaoRequest(BaseModel):
+    """Campos vazios mantêm a sugestão feita pelo ML."""
+
+    descricao_servico: (
+        Annotated[str, StringConstraints(strip_whitespace=True, min_length=5)] | None
+    ) = None
+    data_agendada: date | None = None
+    observacao: (
+        Annotated[str, StringConstraints(strip_whitespace=True, max_length=500)] | None
+    ) = None
+
+    @field_validator("observacao")
+    @classmethod
+    def observacao_vazia_vira_nula(cls, valor: str | None) -> str | None:
+        return valor or None
+
+
+class RejeitarManutencaoRequest(BaseModel):
+    observacao: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=3, max_length=500)
+    ] = Field(..., description="Motivo da rejeição")
 
 
 class MaquinaDispositivoResponse(ResponseBase):

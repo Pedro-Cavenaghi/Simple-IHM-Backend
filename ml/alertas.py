@@ -9,16 +9,36 @@ São as MESMAS regras no monitor da API (app/monitor.py) e na avaliação offlin
   quando as janelas ainda "lembram" a falha mas a árvore nunca foi treinada.
 - Encerra: após LEITURAS_ENCERRAMENTO leituras normais seguidas (3 min, o tempo
   que as janelas levam para esquecer a falha). Com 1 min, o alerta fechava e
-  reabria durante a transição, gerando alertas duplicados.
+  reabria durante a transição, gerando alertas duplicados. Na API, uma leitura
+  só conta como normal se os sinais também voltaram à faixa da referência.
 """
 
 from collections import defaultdict
 
 import numpy as np
+import pandas as pd
 
 from ml.features import JANELA_TENDENCIA
 
 LEITURAS_ENCERRAMENTO = JANELA_TENDENCIA
+
+# Desvio máximo da referência para considerar um sinal de volta ao normal: cerca
+# de 1,4× o maior desvio visto em operação normal no treino. O Isolation Forest
+# reage bem a mudanças, mas marca só 6% a 10% das leituras de uma falha constante.
+# Por isso esta regra impede que o alerta encerre com a máquina ainda fora da faixa.
+LIMITES_DESVIO = {
+    "tensao_volt_desvio": 0.009,
+    "corrente_ampere_desvio": 0.06,
+    "potencia_watt_desvio": 0.06,
+    "vibracao_rms_desvio": 0.16,
+    "frequencia_hz_desvio": 0.004,
+}
+
+
+def fora_da_faixa(features: pd.DataFrame) -> np.ndarray:
+    """True nas linhas em que algum sinal segue longe da referência."""
+    desvios = features[list(LIMITES_DESVIO)].abs().to_numpy()
+    return (desvios > np.array(list(LIMITES_DESVIO.values()))).any(axis=1)
 
 
 class VotacaoDiagnostico:

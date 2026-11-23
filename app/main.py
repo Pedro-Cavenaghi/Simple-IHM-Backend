@@ -1,22 +1,25 @@
+import math
 import os
 import warnings
 from contextlib import asynccontextmanager
 from datetime import date, datetime
+from typing import Literal
 
 import asyncpg
 from fastapi import (
-    BackgroundTasks,
     Depends,
     FastAPI,
     HTTPException,
     Query,
+    Request,
     WebSocket,
     status,
 )
 from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from passlib.context import CryptContext
 from pydantic import BaseModel
 
@@ -32,6 +35,7 @@ from app.websocket_manager import manager
 # Importações internas dos modelos
 from .models import (
     AlertaResponse,
+    AprovarManutencaoRequest,
     AuditLogResponse,
     FuncionarioCreate,
     FuncionarioResponse,
@@ -47,6 +51,7 @@ from .models import (
     MaquinaResponse,
     MaquinaStatusResponse,
     MaquinaUpdate,
+    RejeitarManutencaoRequest,
 )
 
 warnings.filterwarnings("ignore", category=UserWarning, module="passlib")
@@ -83,6 +88,7 @@ async def lifespan(app: FastAPI):
     print("📖 Documentação: http://127.0.0.1:8000/docs")
     print("=" * 60 + "\n")
     yield
+    await monitor.parar()
     await Database.disconnect()
 
 
@@ -93,6 +99,18 @@ app = FastAPI(
     lifespan=lifespan,
     docs_url=None,
 )
+
+
+@app.exception_handler(RequestValidationError)
+async def erro_de_validacao(_request: Request, erro: RequestValidationError):
+    """Resposta 422 padrão, sem quebrar ao devolver um Infinity ou NaN recebido."""
+    detalhes = jsonable_encoder(erro.errors())
+    for item in detalhes:
+        valor = item.get("input")
+        if isinstance(valor, float) and not math.isfinite(valor):
+            item["input"] = str(valor)
+    return JSONResponse(status_code=422, content={"detail": detalhes})
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -162,7 +180,6 @@ async def websocket_telemetria_por_id(
 @app.post("/enviar-dados", status_code=status.HTTP_200_OK, tags=["Telemetria IoT"])
 async def receber_dados(
     leitura: LeituraSensor,
-    background_tasks: BackgroundTasks,
     conn: asyncpg.Connection = Depends(get_db),
     _: str = Depends(
         auth.verificar_api_key
@@ -181,8 +198,9 @@ async def receber_dados(
     if sucesso:
         # 2. Transmite os novos dados recebidos via WebSocket Broadcast para os navegadores
         await manager.broadcast(dados_leitura)
-        # 3. Machine learning em segundo plano, depois da resposta à ESP32
-        background_tasks.add_task(monitor.processar, dados_leitura)
+        # 3. Machine learning fora da requisição. Com BackgroundTasks, cada leitura
+        # na fila prendia uma conexão do pool e o monitor não conseguia gravar
+        monitor.agendar(dados_leitura)
         return {
             "status": "Sucesso",
             "mensagem": "Dados gravados e transmitidos em tempo real",
@@ -839,6 +857,9 @@ async def concluir_ordem_manutencao(
     )
 
     registro_atualizado = await repository.obter_manutencao_por_id(conn, manutencao_id)
+    if registro_atualizado and registro_atualizado.get("maquina_id"):
+        # Depois do serviço, o monitor reaprende o normal da máquina
+        await monitor.reiniciar_linha_de_base(registro_atualizado["maquina_id"])
     return registro_atualizado
 
 
@@ -884,12 +905,14 @@ async def deletar_manutencao_logica(
 # ==========================================
 
 TODOS_OS_PERFIS = ["ADMIN", "OPERADOR", "MANUTENCAO"]
+PERFIS_ANALISE = ["ADMIN", "MANUTENCAO"]
 
 
 @app.websocket("/ws/alertas")
 async def websocket_alertas(websocket: WebSocket, token: str | None = Query(None)):
     """Recebe {"tipo": "alerta_criado" | "alerta_atualizado" | "alerta_encerrado" |
-    "alerta_reconhecido", "alerta": {...}} sempre que um alerta muda."""
+    "alerta_reconhecido" | "manutencao_aprovada" | "manutencao_rejeitada",
+    "alerta": {...}} sempre que um alerta muda."""
     if not token or not auth.validar_token_jwt_simples(token):
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
@@ -913,6 +936,23 @@ async def listar_alertas(
     """Alertas gerados pelo machine learning, do mais recente para o mais antigo."""
     return await repository.listar_alertas(
         conn, maquina_id=maquina_id, apenas_abertos=apenas_abertos, limite=limite
+    )
+
+
+@app.get(
+    "/alertas/solicitacoes",
+    response_model=list[AlertaResponse],
+    tags=["Alertas de ML"],
+)
+async def listar_solicitacoes_manutencao(
+    situacao: Literal["pendente", "aprovada", "rejeitada"] = Query("pendente"),
+    limite: int = Query(100, ge=1, le=500),
+    conn: asyncpg.Connection = Depends(get_db),
+    _: FuncionarioResponse = Depends(auth.PermissaoRequerida(PERFIS_ANALISE)),
+):
+    """Fila de solicitações de manutenção preditiva, da data mais próxima à mais distante."""
+    return await repository.listar_solicitacoes_manutencao(
+        conn, status=situacao, limite=limite
     )
 
 
@@ -960,6 +1000,98 @@ async def reconhecer_alerta(
         detalhes=f"Reconheceu o alerta {alerta_id}: {alerta['mensagem']}",
     )
     await notificar_alerta("alerta_reconhecido", alerta)
+    return alerta
+
+
+@app.patch(
+    "/alertas/{alerta_id}/manutencao/aprovar",
+    response_model=AlertaResponse,
+    tags=["Alertas de ML"],
+)
+async def aprovar_manutencao(
+    alerta_id: int,
+    analise: AprovarManutencaoRequest,
+    conn: asyncpg.Connection = Depends(get_db),
+    usuario_atual: FuncionarioResponse = Depends(
+        auth.PermissaoRequerida(PERFIS_ANALISE)
+    ),
+):
+    """Aprova a solicitação e cria a ordem de manutenção preditiva.
+
+    Uma data de hoje ou anterior coloca a máquina em 'Manutenção' imediatamente.
+    """
+    if not await repository.obter_alerta(conn, alerta_id):
+        raise HTTPException(status_code=404, detail="Alerta não encontrado.")
+
+    alerta = await repository.aprovar_manutencao_alerta(
+        conn,
+        alerta_id,
+        usuario_atual.id,
+        descricao=analise.descricao_servico,
+        data_agendada=analise.data_agendada,
+        observacao=analise.observacao,
+    )
+    if not alerta:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Este alerta não tem solicitação de manutenção pendente.",
+        )
+
+    await repository.registrar_auditoria(
+        conn=conn,
+        usuario_id=usuario_atual.id,
+        acao="APROVAR_MANUTENCAO_ML",
+        entidade="alertas",
+        entidade_id=alerta_id,
+        detalhes=(
+            f"Aprovou a manutenção do alerta {alerta_id} e criou a ordem"
+            f" {alerta['manutencao_id']}."
+        ),
+    )
+    await notificar_alerta("manutencao_aprovada", alerta)
+    return alerta
+
+
+@app.patch(
+    "/alertas/{alerta_id}/manutencao/rejeitar",
+    response_model=AlertaResponse,
+    tags=["Alertas de ML"],
+)
+async def rejeitar_manutencao(
+    alerta_id: int,
+    analise: RejeitarManutencaoRequest,
+    conn: asyncpg.Connection = Depends(get_db),
+    usuario_atual: FuncionarioResponse = Depends(
+        auth.PermissaoRequerida(PERFIS_ANALISE)
+    ),
+):
+    """Rejeita a solicitação informando o motivo. Nenhuma ordem é criada."""
+    if not await repository.obter_alerta(conn, alerta_id):
+        raise HTTPException(status_code=404, detail="Alerta não encontrado.")
+
+    alerta = await repository.rejeitar_manutencao_alerta(
+        conn, alerta_id, usuario_atual.id, analise.observacao
+    )
+    if not alerta:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Este alerta não tem solicitação de manutenção pendente.",
+        )
+
+    await repository.registrar_auditoria(
+        conn=conn,
+        usuario_id=usuario_atual.id,
+        acao="REJEITAR_MANUTENCAO_ML",
+        entidade="alertas",
+        entidade_id=alerta_id,
+        detalhes=f"Rejeitou a manutenção do alerta {alerta_id}: {analise.observacao}",
+    )
+    await notificar_alerta("manutencao_rejeitada", alerta)
+    if alerta["diagnostico"]:
+        # Quem analisou disse que não é falha: o nível atual passa a ser o normal
+        await monitor.reiniciar_linha_de_base(
+            alerta["maquina_id"], apenas_diagnostico=alerta["diagnostico"]
+        )
     return alerta
 
 

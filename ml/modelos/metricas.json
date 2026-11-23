@@ -73,5 +73,43 @@
     ],
     "linhas_treino_detector": 262290,
     "linhas_treino_diagnostico": 27005
+  },
+  "robustez": {
+    "vibracao_x1_6_por_2h": {
+      "maquinas": 8,
+      "taxa_deteccao": 1.0,
+      "atraso_mediano_min": 1.2166666666666668,
+      "cobertura_da_falha": 0.9821875,
+      "alertas_por_falha": 1.0
+    },
+    "sobrecarga_x1_4_por_2h": {
+      "maquinas": 8,
+      "taxa_deteccao": 0.875,
+      "atraso_mediano_min": 1.0,
+      "cobertura_da_falha": 0.868125,
+      "alertas_por_falha": 0.875
+    },
+    "volta_ao_normal_apos_40min": {
+      "maquinas": 8,
+      "taxa_deteccao": 1.0,
+      "atraso_mediano_min": 1.2166666666666668,
+      "cobertura_da_falha": 0.9465625,
+      "alertas_por_falha": 1.0,
+      "maquinas_com_alerta_apos_o_fim": 0.0
+    },
+    "desgaste_ate_2x_em_1h": {
+      "maquinas": 8,
+      "taxa_deteccao": 1.0,
+      "atraso_mediano_min": 22.53333333333333,
+      "cobertura_da_falha": 0.5747222222222222,
+      "alertas_por_falha": 1.125
+    },
+    "desgaste_ate_2x_em_4h": {
+      "maquinas": 8,
+      "taxa_deteccao": 1.0,
+      "atraso_mediano_min": 148.75,
+      "cobertura_da_falha": 0.032621527777777784,
+      "alertas_por_falha": 2.125
+    }
   }
 }
