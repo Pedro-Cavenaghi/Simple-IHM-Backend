@@ -119,7 +119,10 @@ def test_sem_modelo_o_monitor_nao_faz_nada():
 
     assert m.habilitado is False
     assert eventos == []
-    assert m.status() == {"habilitado": False, "maquinas": []}
+    status = m.status()
+    assert status["habilitado"] is False
+    assert status["maquinas"] == []
+    assert "aviso" in status
 
 
 def test_alerta_so_abre_apos_anomalias_seguidas(monitor_falso):

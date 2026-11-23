@@ -656,11 +656,62 @@ SQL_ALERTA = """
         a.diagnostico, a.confianca, a.pontuacao, a.severidade, a.mensagem,
         a.minutos_ate_limite, a.criado_em, a.atualizado_em, a.encerrado_em,
         a.reconhecido_em, a.reconhecido_por, f.nome AS reconhecido_por_nome,
-        a.manutencao_id
+        a.manutencao_id, a.manutencao_status, a.manutencao_descricao,
+        a.manutencao_data_sugerida, a.analisado_por,
+        analista.nome AS analisado_por_nome, a.analisado_em, a.analise_observacao
     FROM alertas a
     JOIN maquinas m ON m.id = a.maquina_id
     LEFT JOIN funcionarios f ON f.id = a.reconhecido_por
+    LEFT JOIN funcionarios analista ON analista.id = a.analisado_por
 """
+
+
+async def _solicitar_manutencao(
+    conn: asyncpg.Connection, alerta_id: int, descricao: str | None
+) -> None:
+    """Abre ou atualiza a solicitação pendente do alerta.
+
+    Não abre outra se a máquina já tem solicitação pendente ou ordem em aberto
+    para o MESMO diagnóstico: uma falha diferente sempre gera sua solicitação.
+    Nunca altera uma solicitação já analisada. Severidade alta sugere hoje, as
+    demais amanhã, e a data sugerida nunca é adiada.
+    """
+    if not descricao:
+        return
+    sql = """
+        UPDATE alertas a
+        SET manutencao_status = 'pendente',
+            manutencao_descricao = $2::text,
+            manutencao_data_sugerida = LEAST(
+                a.manutencao_data_sugerida,
+                CURRENT_DATE + CASE WHEN a.severidade = 'alta' THEN 0 ELSE 1 END
+            )
+        WHERE a.id = $1
+          AND a.diagnostico IS NOT NULL
+          AND (
+            a.manutencao_status = 'pendente'
+            OR (
+                a.manutencao_status IS NULL
+                AND NOT EXISTS (
+                    SELECT 1 FROM alertas outro
+                    WHERE outro.maquina_id = a.maquina_id
+                      AND outro.id <> a.id
+                      AND outro.diagnostico = a.diagnostico
+                      AND outro.manutencao_status = 'pendente'
+                )
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM alertas origem
+                    JOIN manutencao_preventiva mp ON mp.id = origem.manutencao_id
+                    WHERE origem.maquina_id = a.maquina_id
+                      AND origem.diagnostico = a.diagnostico
+                      AND mp.concluida = FALSE
+                      AND mp.deletado_em IS NULL
+                )
+            )
+          );
+    """
+    await conn.execute(sql, alerta_id, descricao)
 
 
 async def obter_alerta(conn: asyncpg.Connection, alerta_id: int) -> dict | None:
@@ -704,16 +755,21 @@ async def criar_alerta(conn: asyncpg.Connection, dados: dict) -> dict | None:
             VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING id;
         """
-        alerta_id = await conn.fetchval(
-            sql,
-            dados["maquina_id"],
-            dados.get("diagnostico"),
-            dados.get("confianca"),
-            dados.get("pontuacao", 0.0),
-            dados.get("severidade", "media"),
-            dados["mensagem"],
-            dados.get("minutos_ate_limite"),
-        )
+        # Tudo ou nada: um alerta órfão bloquearia a máquina no índice de alerta aberto
+        async with conn.transaction():
+            alerta_id = await conn.fetchval(
+                sql,
+                dados["maquina_id"],
+                dados.get("diagnostico"),
+                dados.get("confianca"),
+                dados.get("pontuacao", 0.0),
+                dados.get("severidade", "media"),
+                dados["mensagem"],
+                dados.get("minutos_ate_limite"),
+            )
+            await _solicitar_manutencao(
+                conn, alerta_id, dados.get("manutencao_descricao")
+            )
         return await obter_alerta(conn, alerta_id)
     except Exception as e:
         print(f"Erro ao criar alerta: {e}")
@@ -733,17 +789,23 @@ async def atualizar_alerta(
             WHERE id = $1 AND encerrado_em IS NULL
             RETURNING id;
         """
-        atualizado = await conn.fetchval(
-            sql,
-            alerta_id,
-            dados.get("diagnostico"),
-            dados.get("confianca"),
-            dados.get("pontuacao", 0.0),
-            dados.get("severidade", "media"),
-            dados["mensagem"],
-            dados.get("minutos_ate_limite"),
-        )
-        return await obter_alerta(conn, alerta_id) if atualizado else None
+        async with conn.transaction():
+            atualizado = await conn.fetchval(
+                sql,
+                alerta_id,
+                dados.get("diagnostico"),
+                dados.get("confianca"),
+                dados.get("pontuacao", 0.0),
+                dados.get("severidade", "media"),
+                dados["mensagem"],
+                dados.get("minutos_ate_limite"),
+            )
+            if not atualizado:
+                return None
+            await _solicitar_manutencao(
+                conn, alerta_id, dados.get("manutencao_descricao")
+            )
+        return await obter_alerta(conn, alerta_id)
     except Exception as e:
         print(f"Erro ao atualizar alerta: {e}")
         return None
@@ -779,6 +841,115 @@ async def reconhecer_alerta(
         return await obter_alerta(conn, alerta_id) if reconhecido else None
     except Exception as e:
         print(f"Erro ao reconhecer alerta: {e}")
+        return None
+
+
+async def listar_solicitacoes_manutencao(
+    conn: asyncpg.Connection, status: str = "pendente", limite: int = 100
+) -> list[dict]:
+    try:
+        sql = (
+            SQL_ALERTA
+            + """
+            WHERE a.manutencao_status = $1 AND m.deletado_em IS NULL
+            ORDER BY a.manutencao_data_sugerida ASC, a.criado_em DESC
+            LIMIT $2;
+        """
+        )
+        registros = await conn.fetch(sql, status, limite)
+        return [dict(r) for r in registros]
+    except Exception as e:
+        print(f"Erro ao listar solicitações de manutenção: {e}")
+        return []
+
+
+async def aprovar_manutencao_alerta(
+    conn: asyncpg.Connection,
+    alerta_id: int,
+    usuario_id: int,
+    descricao: str | None = None,
+    data_agendada: date | None = None,
+    observacao: str | None = None,
+) -> dict | None:
+    """Aprova a solicitação e cria a ordem preditiva, tudo ou nada.
+
+    Retorna None se a solicitação não está pendente ou a máquina foi removida.
+    """
+    try:
+        async with conn.transaction():
+            solicitacao = await conn.fetchrow(
+                """
+                UPDATE alertas a
+                SET manutencao_status = 'aprovada',
+                    manutencao_descricao = COALESCE($3::text, a.manutencao_descricao),
+                    manutencao_data_sugerida =
+                        COALESCE($4::date, a.manutencao_data_sugerida),
+                    analisado_por = $2,
+                    analisado_em = NOW(),
+                    analise_observacao = $5::text,
+                    atualizado_em = NOW()
+                FROM maquinas m
+                WHERE a.id = $1
+                  AND m.id = a.maquina_id
+                  AND m.deletado_em IS NULL
+                  AND a.manutencao_status = 'pendente'
+                RETURNING a.maquina_id, a.manutencao_descricao,
+                          a.manutencao_data_sugerida;
+                """,
+                alerta_id,
+                usuario_id,
+                descricao.strip() if descricao else None,
+                data_agendada,
+                observacao,
+            )
+            if not solicitacao:
+                return None
+
+            manutencao_id = await conn.fetchval(
+                """
+                INSERT INTO manutencao_preventiva
+                (maquina_id, descricao_servico, data_agendada, tipo_manutencao)
+                VALUES ($1, $2, $3, 'Preditiva')
+                RETURNING id;
+                """,
+                solicitacao["maquina_id"],
+                solicitacao["manutencao_descricao"],
+                solicitacao["manutencao_data_sugerida"],
+            )
+            await conn.execute(
+                "UPDATE alertas SET manutencao_id = $2 WHERE id = $1;",
+                alerta_id,
+                manutencao_id,
+            )
+        return await obter_alerta(conn, alerta_id)
+    except Exception as e:
+        print(f"Erro ao aprovar manutenção do alerta: {e}")
+        return None
+
+
+async def rejeitar_manutencao_alerta(
+    conn: asyncpg.Connection, alerta_id: int, usuario_id: int, observacao: str
+) -> dict | None:
+    """Rejeita a solicitação. Retorna None se ela não está pendente."""
+    try:
+        rejeitado = await conn.fetchval(
+            """
+            UPDATE alertas
+            SET manutencao_status = 'rejeitada',
+                analisado_por = $2,
+                analisado_em = NOW(),
+                analise_observacao = $3,
+                atualizado_em = NOW()
+            WHERE id = $1 AND manutencao_status = 'pendente'
+            RETURNING id;
+            """,
+            alerta_id,
+            usuario_id,
+            observacao.strip(),
+        )
+        return await obter_alerta(conn, alerta_id) if rejeitado else None
+    except Exception as e:
+        print(f"Erro ao rejeitar manutenção do alerta: {e}")
         return None
 
 

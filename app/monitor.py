@@ -56,6 +56,13 @@ NOMES_FALHAS = {
 }
 # Falhas elétricas podem danificar o motor rapidamente
 FALHAS_ALTA_SEVERIDADE = {"sobrecarga", "queda_tensao"}
+# Serviço sugerido na solicitação de manutenção preditiva
+ACOES_MANUTENCAO = {
+    "desgaste_rolamento": "Inspecionar e lubrificar os rolamentos; trocar se necessário.",
+    "sobrecarga": "Verificar a carga mecânica, a corrente do motor e a proteção térmica.",
+    "queda_tensao": "Verificar a alimentação elétrica, os cabos e as conexões.",
+    "desbalanceamento": "Verificar o balanceamento, o alinhamento e a fixação do conjunto.",
+}
 
 
 @dataclass(frozen=True)
@@ -136,22 +143,49 @@ def descrever(
     return texto
 
 
+# Problema encontrado na última tentativa de carregar o modelo
+aviso_modelo: str | None = None
+
+
+def descrever_manutencao(diagnostico: str | None) -> str | None:
+    """Serviço proposto ao analista. None enquanto não há diagnóstico."""
+    if diagnostico not in ACOES_MANUTENCAO:
+        return None
+    return (
+        f"Manutenção preditiva por provável {NOMES_FALHAS[diagnostico]}: "
+        f"{ACOES_MANUTENCAO[diagnostico]}"
+    )
+
+
 def carregar_modelo(caminho: Path = CAMINHO_MODELO):
-    """Carrega o ModeloFalhas, ou retorna None (com o motivo no log) se não der."""
+    """Carrega o ModeloFalhas, ou retorna None se não der.
+
+    O motivo de um desligamento, ou de uma versão incompatível, fica em
+    `aviso_modelo` e aparece em GET /ml/status.
+    """
+    global aviso_modelo
+    aviso_modelo = None
     if not ML_HABILITADO:
-        print("--- Monitor de ML desligado (ML_HABILITADO=false) ---")
+        aviso_modelo = "Monitor de ML desligado (ML_HABILITADO=false)"
+        print(f"--- {aviso_modelo} ---")
         return None
     try:
+        import sklearn
+
         from ml.modelo import ModeloFalhas
 
         modelo = ModeloFalhas.carregar(caminho)
         print(f"--- Modelo de ML carregado (treinado em {modelo.treinado_em}) ---")
+        if modelo.versao_sklearn != sklearn.__version__:
+            aviso_modelo = (
+                f"Modelo treinado com scikit-learn {modelo.versao_sklearn}, mas a API"
+                f" usa {sklearn.__version__}. Retreine com python -m ml.treinar."
+            )
+            print(f"--- AVISO: {aviso_modelo} ---")
         return modelo
     except Exception as erro:
-        print(
-            "--- Monitor de ML desligado: não foi possível carregar o modelo"
-            f" ({erro}) ---"
-        )
+        aviso_modelo = f"Monitor de ML desligado: modelo não carregado ({erro})"
+        print(f"--- ERRO: {aviso_modelo} ---")
         return None
 
 
@@ -323,6 +357,7 @@ class MonitorFalhas:
             "severidade": severidade,
             "mensagem": descrever(diagnostico, confianca, minutos),
             "minutos_ate_limite": None if minutos is None else round(minutos, 1),
+            "manutencao_descricao": descrever_manutencao(diagnostico),
         }
 
     async def _abrir(self, maquina_id: int, estado: EstadoMaquina, avaliacao):
@@ -370,7 +405,11 @@ class MonitorFalhas:
                     ),
                 }
             )
-        resposta = {"habilitado": self.habilitado, "maquinas": maquinas}
+        resposta = {
+            "habilitado": self.habilitado,
+            "aviso": aviso_modelo,
+            "maquinas": maquinas,
+        }
         if self.habilitado:
             deteccao = self.modelo.metricas.get("deteccao", {})
             diagnostico = self.modelo.metricas.get("diagnostico", {})

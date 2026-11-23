@@ -2,6 +2,7 @@ import os
 import warnings
 from contextlib import asynccontextmanager
 from datetime import date, datetime
+from typing import Literal
 
 import asyncpg
 from fastapi import (
@@ -32,6 +33,7 @@ from app.websocket_manager import manager
 # Importações internas dos modelos
 from .models import (
     AlertaResponse,
+    AprovarManutencaoRequest,
     AuditLogResponse,
     FuncionarioCreate,
     FuncionarioResponse,
@@ -47,6 +49,7 @@ from .models import (
     MaquinaResponse,
     MaquinaStatusResponse,
     MaquinaUpdate,
+    RejeitarManutencaoRequest,
 )
 
 warnings.filterwarnings("ignore", category=UserWarning, module="passlib")
@@ -884,12 +887,14 @@ async def deletar_manutencao_logica(
 # ==========================================
 
 TODOS_OS_PERFIS = ["ADMIN", "OPERADOR", "MANUTENCAO"]
+PERFIS_ANALISE = ["ADMIN", "MANUTENCAO"]
 
 
 @app.websocket("/ws/alertas")
 async def websocket_alertas(websocket: WebSocket, token: str | None = Query(None)):
     """Recebe {"tipo": "alerta_criado" | "alerta_atualizado" | "alerta_encerrado" |
-    "alerta_reconhecido", "alerta": {...}} sempre que um alerta muda."""
+    "alerta_reconhecido" | "manutencao_aprovada" | "manutencao_rejeitada",
+    "alerta": {...}} sempre que um alerta muda."""
     if not token or not auth.validar_token_jwt_simples(token):
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
@@ -913,6 +918,23 @@ async def listar_alertas(
     """Alertas gerados pelo machine learning, do mais recente para o mais antigo."""
     return await repository.listar_alertas(
         conn, maquina_id=maquina_id, apenas_abertos=apenas_abertos, limite=limite
+    )
+
+
+@app.get(
+    "/alertas/solicitacoes",
+    response_model=list[AlertaResponse],
+    tags=["Alertas de ML"],
+)
+async def listar_solicitacoes_manutencao(
+    situacao: Literal["pendente", "aprovada", "rejeitada"] = Query("pendente"),
+    limite: int = Query(100, ge=1, le=500),
+    conn: asyncpg.Connection = Depends(get_db),
+    _: FuncionarioResponse = Depends(auth.PermissaoRequerida(PERFIS_ANALISE)),
+):
+    """Fila de solicitações de manutenção preditiva, da data mais próxima à mais distante."""
+    return await repository.listar_solicitacoes_manutencao(
+        conn, status=situacao, limite=limite
     )
 
 
@@ -960,6 +982,93 @@ async def reconhecer_alerta(
         detalhes=f"Reconheceu o alerta {alerta_id}: {alerta['mensagem']}",
     )
     await notificar_alerta("alerta_reconhecido", alerta)
+    return alerta
+
+
+@app.patch(
+    "/alertas/{alerta_id}/manutencao/aprovar",
+    response_model=AlertaResponse,
+    tags=["Alertas de ML"],
+)
+async def aprovar_manutencao(
+    alerta_id: int,
+    analise: AprovarManutencaoRequest,
+    conn: asyncpg.Connection = Depends(get_db),
+    usuario_atual: FuncionarioResponse = Depends(
+        auth.PermissaoRequerida(PERFIS_ANALISE)
+    ),
+):
+    """Aprova a solicitação e cria a ordem de manutenção preditiva.
+
+    Uma data de hoje ou anterior coloca a máquina em 'Manutenção' imediatamente.
+    """
+    if not await repository.obter_alerta(conn, alerta_id):
+        raise HTTPException(status_code=404, detail="Alerta não encontrado.")
+
+    alerta = await repository.aprovar_manutencao_alerta(
+        conn,
+        alerta_id,
+        usuario_atual.id,
+        descricao=analise.descricao_servico,
+        data_agendada=analise.data_agendada,
+        observacao=analise.observacao,
+    )
+    if not alerta:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Este alerta não tem solicitação de manutenção pendente.",
+        )
+
+    await repository.registrar_auditoria(
+        conn=conn,
+        usuario_id=usuario_atual.id,
+        acao="APROVAR_MANUTENCAO_ML",
+        entidade="alertas",
+        entidade_id=alerta_id,
+        detalhes=(
+            f"Aprovou a manutenção do alerta {alerta_id} e criou a ordem"
+            f" {alerta['manutencao_id']}."
+        ),
+    )
+    await notificar_alerta("manutencao_aprovada", alerta)
+    return alerta
+
+
+@app.patch(
+    "/alertas/{alerta_id}/manutencao/rejeitar",
+    response_model=AlertaResponse,
+    tags=["Alertas de ML"],
+)
+async def rejeitar_manutencao(
+    alerta_id: int,
+    analise: RejeitarManutencaoRequest,
+    conn: asyncpg.Connection = Depends(get_db),
+    usuario_atual: FuncionarioResponse = Depends(
+        auth.PermissaoRequerida(PERFIS_ANALISE)
+    ),
+):
+    """Rejeita a solicitação informando o motivo. Nenhuma ordem é criada."""
+    if not await repository.obter_alerta(conn, alerta_id):
+        raise HTTPException(status_code=404, detail="Alerta não encontrado.")
+
+    alerta = await repository.rejeitar_manutencao_alerta(
+        conn, alerta_id, usuario_atual.id, analise.observacao
+    )
+    if not alerta:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Este alerta não tem solicitação de manutenção pendente.",
+        )
+
+    await repository.registrar_auditoria(
+        conn=conn,
+        usuario_id=usuario_atual.id,
+        acao="REJEITAR_MANUTENCAO_ML",
+        entidade="alertas",
+        entidade_id=alerta_id,
+        detalhes=f"Rejeitou a manutenção do alerta {alerta_id}: {analise.observacao}",
+    )
+    await notificar_alerta("manutencao_rejeitada", alerta)
     return alerta
 
 

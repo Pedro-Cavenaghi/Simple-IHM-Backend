@@ -412,3 +412,4 @@ ALTER TABLE ONLY public.status_atual_maquinas
 --
 
 \ir migrations/001_alertas.sql
+\ir migrations/002_solicitacao_manutencao.sql
