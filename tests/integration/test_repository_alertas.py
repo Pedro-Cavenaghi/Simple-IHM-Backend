@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 import app.repository as repository
@@ -104,6 +106,57 @@ async def test_reconhecer_alerta_uma_vez(db_conn):
         await repository.reconhecer_alerta(db_conn, alerta["id"], funcionario_id)
         is None
     )
+
+
+@pytest.mark.asyncio
+async def test_linha_de_base_e_gravada_no_alerta(db_conn):
+    maquina = await criar_maquina(db_conn)
+    base = {"vibracao_rms": 2.0, "tensao_volt": 220.0}
+
+    alerta = await repository.criar_alerta(
+        db_conn, dados_alerta(maquina["id"], linha_de_base=base)
+    )
+
+    assert json.loads(alerta["linha_de_base"]) == base
+
+
+@pytest.mark.asyncio
+async def test_leituras_recentes_ignoram_periodo_do_alerta(db_conn):
+    maquina = await criar_maquina(db_conn)
+
+    async def gravar(vibracao, ha_minutos):
+        await db_conn.execute(
+            """
+            INSERT INTO logs_maquinas
+            (maquina_id, status_no_momento, vibracao_rms, corrente_ampere,
+             tensao_volt, potencia_watt, frequencia_hz, horario_do_log)
+            VALUES ($1, 'Ativa', $2, 10, 220, 2000, 60,
+                    NOW() - make_interval(mins => $3));
+            """,
+            maquina["id"],
+            vibracao,
+            ha_minutos,
+        )
+
+    await gravar(1.0, 30)
+    await gravar(9.0, 15)
+    await gravar(2.0, 5)
+    alerta = await repository.criar_alerta(db_conn, dados_alerta(maquina["id"]))
+    await db_conn.execute(
+        """
+        UPDATE alertas
+        SET criado_em = NOW() - interval '20 minutes',
+            encerrado_em = NOW() - interval '10 minutes'
+        WHERE id = $1;
+        """,
+        alerta["id"],
+    )
+
+    leituras = await repository.buscar_leituras_recentes(
+        db_conn, maquina["id"], limite=10
+    )
+
+    assert [leitura["vibracao_rms"] for leitura in leituras] == [1.0, 2.0]
 
 
 @pytest.mark.asyncio

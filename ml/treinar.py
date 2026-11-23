@@ -28,6 +28,7 @@ from ml.avaliacao import (
 )
 from ml.features import COLUNAS_DETECTOR, COLUNAS_DIAGNOSTICO, JANELA_CURTA
 from ml.modelo import ModeloFalhas, confirmar
+from ml.robustez import avaliar_robustez
 
 SEMENTE = 42
 SESSOES_TESTE = 2
@@ -144,6 +145,7 @@ def avaliar(modelo: ModeloFalhas, teste: pd.DataFrame) -> dict:
         "deteccao": deteccao,
         "diagnostico": diagnostico,
         "prognostico": prognostico,
+        "robustez": avaliar_robustez(modelo, teste),
     }
 
 

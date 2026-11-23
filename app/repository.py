@@ -1,4 +1,6 @@
 # Teste 1
+import json
+
 import asyncpg
 from datetime import datetime, date, time
 
@@ -658,7 +660,8 @@ SQL_ALERTA = """
         a.reconhecido_em, a.reconhecido_por, f.nome AS reconhecido_por_nome,
         a.manutencao_id, a.manutencao_status, a.manutencao_descricao,
         a.manutencao_data_sugerida, a.analisado_por,
-        analista.nome AS analisado_por_nome, a.analisado_em, a.analise_observacao
+        analista.nome AS analisado_por_nome, a.analisado_em, a.analise_observacao,
+        a.linha_de_base
     FROM alertas a
     JOIN maquinas m ON m.id = a.maquina_id
     LEFT JOIN funcionarios f ON f.id = a.reconhecido_por
@@ -751,10 +754,11 @@ async def criar_alerta(conn: asyncpg.Connection, dados: dict) -> dict | None:
         sql = """
             INSERT INTO alertas
             (maquina_id, diagnostico, confianca, pontuacao, severidade,
-             mensagem, minutos_ate_limite)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+             mensagem, minutos_ate_limite, linha_de_base)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
             RETURNING id;
         """
+        base = dados.get("linha_de_base")
         # Tudo ou nada: um alerta órfão bloquearia a máquina no índice de alerta aberto
         async with conn.transaction():
             alerta_id = await conn.fetchval(
@@ -766,6 +770,7 @@ async def criar_alerta(conn: asyncpg.Connection, dados: dict) -> dict | None:
                 dados.get("severidade", "media"),
                 dados["mensagem"],
                 dados.get("minutos_ate_limite"),
+                None if base is None else json.dumps(base),
             )
             await _solicitar_manutencao(
                 conn, alerta_id, dados.get("manutencao_descricao")
@@ -959,6 +964,7 @@ async def buscar_leituras_recentes(
     """Últimas leituras com a máquina em operação, em ordem cronológica.
 
     Usado pelo monitor de ML para não começar "às cegas" depois de um deploy.
+    Ignora os períodos de alerta, para a falha não contaminar a linha de base.
     """
     try:
         sql = """
@@ -968,6 +974,13 @@ async def buscar_leituras_recentes(
             WHERE maquina_id = $1
               AND status_no_momento = 'Ativa'
               AND horario_do_log >= NOW() - make_interval(hours => $3)
+              AND NOT EXISTS (
+                  SELECT 1 FROM alertas a
+                  WHERE a.maquina_id = logs_maquinas.maquina_id
+                    AND logs_maquinas.horario_do_log >= a.criado_em
+                    AND logs_maquinas.horario_do_log
+                        <= COALESCE(a.encerrado_em, NOW())
+              )
             ORDER BY horario_do_log DESC, id DESC
             LIMIT $2;
         """

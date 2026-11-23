@@ -68,7 +68,18 @@ def linha_de_base(serie: pd.Series) -> pd.Series:
     return base.where(base > 0)
 
 
-def calcular_features(leituras: pd.DataFrame) -> pd.DataFrame:
+def linhas_de_base_atuais(leituras: pd.DataFrame) -> dict[str, float] | None:
+    """Linha de base de cada sinal na última leitura, ou None se ainda não existe."""
+    valores = {
+        sinal: float(linha_de_base(leituras[sinal].astype(float)).iloc[-1])
+        for sinal in SINAIS
+    }
+    return None if any(np.isnan(v) for v in valores.values()) else valores
+
+
+def calcular_features(
+    leituras: pd.DataFrame, base_fixa: dict[str, float] | None = None
+) -> pd.DataFrame:
     """Features de uma única máquina, com as leituras em ordem cronológica.
 
     Use apenas leituras com a máquina em operação (status 'Ativa'): parada,
@@ -76,11 +87,14 @@ def calcular_features(leituras: pd.DataFrame) -> pd.DataFrame:
     LEITURAS_AQUECIMENTO linhas saem com NaN (histórico insuficiente).
 
     Cada feature usa só leituras passadas e a atual, nunca futuras.
+
+    `base_fixa` congela a referência durante um alerta, para que uma falha longa
+    não passe a ser aprendida como o novo normal.
     """
     features = {}
     for sinal in SINAIS:
         serie = leituras[sinal].astype(float)
-        base = linha_de_base(serie)
+        base = linha_de_base(serie) if base_fixa is None else base_fixa[sinal]
         recente = serie.rolling(JANELA_CURTA)
 
         # Quanto a média recente está acima (+) ou abaixo (−) do normal: 0,5 = +50%
@@ -94,14 +108,17 @@ def calcular_features(leituras: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(features, index=leituras.index)[list(COLUNAS_FEATURES)]
 
 
-def vibracao_relativa(leituras: pd.DataFrame) -> pd.Series:
+def vibracao_relativa(
+    leituras: pd.DataFrame, base_fixa: dict[str, float] | None = None
+) -> pd.Series:
     """Vibração em relação à linha de base: 0 = normal, 1,0 = o dobro do normal.
 
     Não é uma feature do modelo: é a série usada pela regressão de tendência
     (tendencia.py) para estimar quando a vibração vai cruzar o limite.
     """
     serie = leituras["vibracao_rms"].astype(float)
-    return serie / linha_de_base(serie) - 1
+    base = linha_de_base(serie) if base_fixa is None else base_fixa["vibracao_rms"]
+    return serie / base - 1
 
 
 def calcular_features_por_grupo(

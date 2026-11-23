@@ -51,6 +51,9 @@ class AuditLogResponse(BaseModel):
 
 
 class LeituraSensor(BaseModel):
+    # Infinity e NaN passam no JSON do Python e cegariam o monitor de ML
+    model_config = ConfigDict(allow_inf_nan=False)
+
     maquina_id: int = Field(gt=0, description="O ID deve ser maior que 0")
     vibracao_rms: float = Field(ge=0.0, description="Vibração não pode ser negativa")
     corrente_ampere: float = Field(ge=0.0, description="Corrente não pode ser negativa")

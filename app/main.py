@@ -1,3 +1,4 @@
+import math
 import os
 import warnings
 from contextlib import asynccontextmanager
@@ -6,18 +7,19 @@ from typing import Literal
 
 import asyncpg
 from fastapi import (
-    BackgroundTasks,
     Depends,
     FastAPI,
     HTTPException,
     Query,
+    Request,
     WebSocket,
     status,
 )
 from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from passlib.context import CryptContext
 from pydantic import BaseModel
 
@@ -86,6 +88,7 @@ async def lifespan(app: FastAPI):
     print("📖 Documentação: http://127.0.0.1:8000/docs")
     print("=" * 60 + "\n")
     yield
+    await monitor.parar()
     await Database.disconnect()
 
 
@@ -96,6 +99,18 @@ app = FastAPI(
     lifespan=lifespan,
     docs_url=None,
 )
+
+
+@app.exception_handler(RequestValidationError)
+async def erro_de_validacao(_request: Request, erro: RequestValidationError):
+    """Resposta 422 padrão, sem quebrar ao devolver um Infinity ou NaN recebido."""
+    detalhes = jsonable_encoder(erro.errors())
+    for item in detalhes:
+        valor = item.get("input")
+        if isinstance(valor, float) and not math.isfinite(valor):
+            item["input"] = str(valor)
+    return JSONResponse(status_code=422, content={"detail": detalhes})
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -165,7 +180,6 @@ async def websocket_telemetria_por_id(
 @app.post("/enviar-dados", status_code=status.HTTP_200_OK, tags=["Telemetria IoT"])
 async def receber_dados(
     leitura: LeituraSensor,
-    background_tasks: BackgroundTasks,
     conn: asyncpg.Connection = Depends(get_db),
     _: str = Depends(
         auth.verificar_api_key
@@ -184,8 +198,9 @@ async def receber_dados(
     if sucesso:
         # 2. Transmite os novos dados recebidos via WebSocket Broadcast para os navegadores
         await manager.broadcast(dados_leitura)
-        # 3. Machine learning em segundo plano, depois da resposta à ESP32
-        background_tasks.add_task(monitor.processar, dados_leitura)
+        # 3. Machine learning fora da requisição. Com BackgroundTasks, cada leitura
+        # na fila prendia uma conexão do pool e o monitor não conseguia gravar
+        monitor.agendar(dados_leitura)
         return {
             "status": "Sucesso",
             "mensagem": "Dados gravados e transmitidos em tempo real",
@@ -842,6 +857,9 @@ async def concluir_ordem_manutencao(
     )
 
     registro_atualizado = await repository.obter_manutencao_por_id(conn, manutencao_id)
+    if registro_atualizado and registro_atualizado.get("maquina_id"):
+        # Depois do serviço, o monitor reaprende o normal da máquina
+        await monitor.reiniciar_linha_de_base(registro_atualizado["maquina_id"])
     return registro_atualizado
 
 
@@ -1069,6 +1087,11 @@ async def rejeitar_manutencao(
         detalhes=f"Rejeitou a manutenção do alerta {alerta_id}: {analise.observacao}",
     )
     await notificar_alerta("manutencao_rejeitada", alerta)
+    if alerta["diagnostico"]:
+        # Quem analisou disse que não é falha: o nível atual passa a ser o normal
+        await monitor.reiniciar_linha_de_base(
+            alerta["maquina_id"], apenas_diagnostico=alerta["diagnostico"]
+        )
     return alerta
 
 
