@@ -868,7 +868,7 @@ async def listar_solicitacoes_manutencao(
         return []
 
 
-async def aprovar_manutencao_alerta( 
+async def aprovar_manutencao_alerta(
     conn: asyncpg.Connection,
     alerta_id: int,
     usuario_id: int,

@@ -45,10 +45,10 @@ jobs:
         run: python -m compileall app simulador ml
 
       - name: Ruff lint
-        run: ruff check app simulador ml
+        run: python -m ruff check app simulador ml
 
       - name: Ruff format
-        run: ruff format --check app simulador ml
+        run: python -m ruff format --check app simulador ml
 
 
   compatibility:
