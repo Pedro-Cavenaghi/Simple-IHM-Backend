@@ -1,8 +1,12 @@
 [run]
 source =
     app
-    simulador
     ml
+    simulador
 
 omit =
     simulador/main.py
+
+[report]
+exclude_lines =
+    pragma: no cover

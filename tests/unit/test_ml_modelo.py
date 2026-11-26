@@ -5,7 +5,11 @@ import pandas as pd
 import pytest
 
 from ml import treinar
-from ml.avaliacao import normal_limpo, preparar_dados
+from ml.avaliacao import (
+    avaliar_prognostico,
+    normal_limpo,
+    preparar_dados,
+)
 from ml.features import LEITURAS_POR_MINUTO
 from ml.modelo import LimiaresEstatisticos, ModeloFalhas, confirmar
 from ml.tendencia import minutos_ate_limite
@@ -82,6 +86,25 @@ def test_ja_acima_do_limite_retorna_zero():
 def test_serie_invalida_nao_preve():
     assert minutos_ate_limite(np.array([0.1, np.nan, 0.3]), 1.0) is None
     assert minutos_ate_limite(np.array([0.1]), 1.0) is None
+
+
+def test_avaliar_prognostico_ignora_marcos_e_historico_insuficiente():
+    dados = pd.DataFrame(
+        {
+            "evento": [0, 0, 0, 0, 0],
+            "cenario": ["desgaste_rolamento"] * 5,
+            "vibracao_relativa": [0.1, 0.2, 0.4, 0.8, 1.2],
+            "vibracao_rms_desvio": [0.1, 0.2, 0.4, 1.0, 1.2],
+            "posicao": [0, 1, 2, 3, 4],
+        }
+    )
+
+    resumo, previsoes = avaliar_prognostico(
+        dados, limite=1.0, marcos=(0.3, 1.5), janela=10
+    )
+
+    assert resumo["previsoes"] == 0
+    assert previsoes.empty
 
 
 # ---------- pipeline completo ----------

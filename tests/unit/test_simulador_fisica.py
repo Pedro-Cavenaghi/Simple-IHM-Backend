@@ -42,6 +42,11 @@ def test_envelope_sobe_mantem_e_desce(t, esperado):
     assert envelope(t, duracao=10, rampa=2) == pytest.approx(esperado)
 
 
+def test_envelope_sem_rampa_mantem_intensidade_constante():
+    assert envelope(1, duracao=10, rampa=0) == 1.0
+    assert envelope(-1, duracao=10, rampa=0) == 0.0
+
+
 def test_leitura_sem_ruido_reproduz_os_parametros():
     p = Parametros(tensao_volt=216.4, corrente_ampere=16.43, fator_potencia=0.85)
 

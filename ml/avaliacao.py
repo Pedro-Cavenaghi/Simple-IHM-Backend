@@ -260,7 +260,10 @@ def avaliar_prognostico(
                     "previsto_min": previsto,
                 }
             )
-    previsoes = pd.DataFrame(linhas)
+    previsoes = pd.DataFrame(
+        linhas,
+        columns=["evento", "marco", "real_min", "previsto_min"],
+    )
     com_previsao = previsoes.dropna(subset=["previsto_min"])
     erro = com_previsao["previsto_min"] - com_previsao["real_min"]
     resumo = {
