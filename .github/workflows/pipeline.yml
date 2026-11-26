@@ -88,9 +88,8 @@ jobs:
       - name: Import FastAPI application
         run: python -c "from app.main import app; print(app.title)"
 
-
   automated-tests:
-    name: Automated Tests
+    name: Automated Tests - Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
 
     strategy:
@@ -126,7 +125,25 @@ jobs:
             --cov=simulador \
             --cov=ml \
             --cov-report=term-missing \
-            --cov-report=xml
+            --cov-report=xml \
+            --cov-report=html
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: coverage-report-python-${{ matrix.python-version }}
+          path: htmlcov/
+          retention-days: 7
+
+      - name: Coverage summary
+        if: always()
+        run: |
+          echo "## Test Coverage - Python ${{ matrix.python-version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo '```text' >> "$GITHUB_STEP_SUMMARY"
+          python -m coverage report >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
 
 
   integration-tests:
