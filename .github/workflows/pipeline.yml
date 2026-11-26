@@ -288,3 +288,64 @@ jobs:
             htmlcov/
             coverage.xml
           retention-days: 14
+
+
+  summary:
+    name: Pipeline Summary
+    runs-on: ubuntu-latest
+
+    if: always()
+
+    needs:
+      - quality
+      - compatibility
+      - automated-tests
+      - integration-tests
+      - coverage-aggregation
+
+    steps:
+      - name: Publish pipeline summary
+        env:
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          COMPATIBILITY_RESULT: ${{ needs.compatibility.result }}
+          AUTOMATED_TESTS_RESULT: ${{ needs.automated-tests.result }}
+          INTEGRATION_TESTS_RESULT: ${{ needs.integration-tests.result }}
+          COVERAGE_RESULT: ${{ needs.coverage-aggregation.result }}
+        run: |
+          results=(
+            "$QUALITY_RESULT"
+            "$COMPATIBILITY_RESULT"
+            "$AUTOMATED_TESTS_RESULT"
+            "$INTEGRATION_TESTS_RESULT"
+            "$COVERAGE_RESULT"
+          )
+
+          overall="SUCCESS"
+          for result in "${results[@]}"; do
+            if [ "$result" != "success" ]; then
+              overall="NOT SUCCESS"
+              break
+            fi
+          done
+
+          echo "# Pipeline Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$overall" = "SUCCESS" ]; then
+            echo "## ✅ Pipeline completed successfully" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## ❌ Pipeline completed with problems" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Job | Result |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Code Quality | $QUALITY_RESULT |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Compatibility (Ubuntu + Windows) | $COMPATIBILITY_RESULT |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Automated Tests (Python 3.12 + 3.13) | $AUTOMATED_TESTS_RESULT |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Integration Tests | $INTEGRATION_TESTS_RESULT |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Total Coverage Report | $COVERAGE_RESULT |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Overall result:** $overall" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "See the **Total Coverage Report** job summary for the detailed coverage percentage and module report. The HTML and XML reports are available in the \`total-coverage-report\` artifact."
