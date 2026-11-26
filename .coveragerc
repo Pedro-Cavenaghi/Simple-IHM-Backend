@@ -1,3 +1,8 @@
 [run]
+source =
+    app
+    simulador
+    ml
+
 omit =
     simulador/main.py

@@ -118,23 +118,23 @@ jobs:
           python -m pip install -r requirements-dev.txt
           python -m pip install -r ml/requirements.txt
 
+      
       - name: Run automated tests
         run: |
           python -m pytest tests/unit tests/api -v \
-            --cov=app \
-            --cov=simulador \
-            --cov=ml \
-            --cov-report=term-missing \
-            --cov-report=xml \
-            --cov-report=html
+            --cov \
+            --cov-report=
 
-      - name: Upload coverage report
+      - name: Upload coverage data
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: coverage-report-python-${{ matrix.python-version }}
-          path: htmlcov/
+          name: coverage-data-python-${{ matrix.python-version }}
+          path: .coverage
+          include-hidden-files: true
+          if-no-files-found: ignore
           retention-days: 7
+
 
       - name: Coverage summary
         if: always()
@@ -211,8 +211,19 @@ jobs:
               -d simple_ihm_test \
               -v ON_ERROR_STOP=1 \
               -f database/schema.sql
+      
       - name: Run integration tests
         run: |
           python -m pytest tests/integration -v \
-            --cov=app.repository \
-            --cov-report=term-missing
+            --cov \
+            --cov-report=
+
+      - name: Upload coverage data
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: coverage-data-integration
+          path: .coverage
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
