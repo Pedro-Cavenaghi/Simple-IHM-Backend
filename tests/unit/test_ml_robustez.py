@@ -2,6 +2,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from ml import robustez
+
 from ml.features import (
     COLUNAS_FEATURES,
     LEITURAS_AQUECIMENTO,
@@ -10,7 +12,14 @@ from ml.features import (
     linhas_de_base_atuais,
     vibracao_relativa,
 )
-from ml.robustez import AQUECIMENTO, avaliar_cenario, degrau, rampa, simular_monitor
+from ml.robustez import (
+    AQUECIMENTO,
+    avaliar_cenario,
+    avaliar_robustez,
+    degrau,
+    rampa,
+    simular_monitor,
+)
 
 
 class ModeloPorDesvio:
@@ -94,3 +103,70 @@ def test_avaliar_cenario_sem_dados_suficientes():
         )
         is None
     )
+
+
+def test_avaliar_robustez_sem_dados_validos():
+    dados = pd.DataFrame(
+        {
+            "sessao": ["s1"],
+            "maquina_id": [1],
+            "cenario": ["normal"],
+            "transicao": [False],
+            "vibracao_rms": [100.0],
+            "corrente_ampere": [15.0],
+            "potencia_watt": [1500.0],
+            "tensao_volt": [220.0],
+            "frequencia_hz": [60.0],
+        }
+    )
+
+    assert avaliar_robustez(ModeloPorDesvio(), dados) == {}
+
+
+def test_avaliar_robustez_com_base_valida():
+    dados = leituras(AQUECIMENTO + 240 * 30)
+    dados["sessao"] = "s1"
+    dados["maquina_id"] = 1
+    dados["cenario"] = "normal"
+    dados["transicao"] = False
+
+    resultado = avaliar_robustez(ModeloPorDesvio(), dados)
+
+    assert set(resultado) == {
+        "vibracao_x1_6_por_2h",
+        "sobrecarga_x1_4_por_2h",
+        "volta_ao_normal_apos_40min",
+        "desgaste_ate_2x_em_1h",
+        "desgaste_ate_2x_em_4h",
+    }
+
+
+def test_linha_de_comando_da_robustez(tmp_path, monkeypatch):
+    from ml import modelo, treinar
+
+    dataset = tmp_path / "dataset.csv"
+    metricas = tmp_path / "metricas.json"
+    dados = pd.DataFrame({"valido": [True, False]})
+    dataset.write_text("sem;dados", encoding="utf-8")
+    metricas.write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(robustez.pd, "read_csv", lambda _: dados)
+    monkeypatch.setattr(robustez, "preparar_dados", lambda _: dados)
+    monkeypatch.setattr(treinar, "dividir_por_sessao", lambda *_args, **_kwargs: (np.array([0]), np.array([0])))
+    monkeypatch.setattr(modelo.ModeloFalhas, "carregar", staticmethod(lambda _: ModeloPorDesvio()))
+    monkeypatch.setattr(robustez, "avaliar_robustez", lambda *_args: {"cenario": {"taxa_deteccao": 1.0}})
+
+    robustez.main(
+        [
+            "--dataset",
+            str(dataset),
+            "--modelo",
+            str(tmp_path / "modelo.joblib"),
+            "--metricas",
+            str(metricas),
+        ]
+    )
+
+    import json
+
+    assert json.loads(metricas.read_text(encoding="utf-8"))["robustez"]["cenario"]["taxa_deteccao"] == 1.0

@@ -78,3 +78,11 @@ def test_linha_de_comando(tmp_path, capsys):
 
     assert saida.exists()
     assert "leituras" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_cliente_offline_descarrega_sem_buffer():
+    from simulador.gerar_dataset import ClienteOffline
+
+    cliente = ClienteOffline([])
+    assert await cliente.descarregar_buffer() == 0

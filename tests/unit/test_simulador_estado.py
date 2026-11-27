@@ -1,3 +1,4 @@
+import asyncio
 import csv
 import random
 
@@ -281,6 +282,26 @@ async def test_pausado_ainda_descarrega_o_buffer():
     assert cliente.buffer == []
 
 
+@pytest.mark.asyncio
+async def test_executar_sincroniza_ciclo_e_espera(monkeypatch):
+    cliente = ClienteFalso([maquina_api()])
+    sim = criar_simulador(cliente)
+    await sim.sincronizar_maquinas()
+    sim.ultima_sincronizacao = 0
+    chamadas = {"sleep": 0}
+
+    async def dormir(_):
+        chamadas["sleep"] += 1
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr("asyncio.sleep", dormir)
+
+    with pytest.raises(asyncio.CancelledError):
+        await sim.executar()
+
+    assert chamadas["sleep"] == 1
+
+
 # ---------- Coleta automática integrada ----------
 
 
@@ -339,6 +360,34 @@ async def test_pausar_e_desligar_encerram_a_coleta():
     sim.iniciar_coleta()
     await sim.desligar_todas()
     assert sim.coleta.ativa is False
+
+
+def test_parar_coleta_desativa_a_coleta():
+    sim = criar_simulador(ClienteFalso([maquina_api()]))
+    sim.iniciar_coleta()
+
+    sim.parar_coleta()
+
+    assert sim.coleta.ativa is False
+
+
+@pytest.mark.asyncio
+async def test_executar_sem_api_reagenda_sincronizacao(monkeypatch):
+    cliente = ClienteFalso(None)
+    sim = criar_simulador(cliente)
+    chamadas = {"sleep": 0}
+
+    async def dormir(_):
+        chamadas["sleep"] += 1
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr("asyncio.sleep", dormir)
+
+    with pytest.raises(asyncio.CancelledError):
+        await sim.executar()
+
+    assert sim.ultima_sincronizacao is None
+    assert chamadas["sleep"] == 1
 
 
 def test_cenario_com_duracao_e_intensidade_personalizadas():

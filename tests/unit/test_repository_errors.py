@@ -292,6 +292,46 @@ async def test_soft_delete_maquina_trata_erro():
     assert resultado is False
 
 
+@pytest.mark.asyncio
+async def test_aprovar_manutencao_alerta_trata_erro():
+    conn = criar_conexao_mock()
+    class ContextoErro:
+        async def __aenter__(self):
+            raise Exception("Erro na transacao")
+        async def __aexit__(self, *_):
+            return False
+    conn.transaction = lambda: ContextoErro()
+    conn.fetchrow.side_effect = Exception("Erro no banco")
+
+    resultado = await repository.aprovar_manutencao_alerta(
+        conn, 1, 2, "Revisao", None, "observacao"
+    )
+
+    assert resultado is None
+
+
+@pytest.mark.asyncio
+async def test_rejeitar_manutencao_alerta_trata_erro():
+    conn = criar_conexao_mock()
+    conn.fetchval.side_effect = Exception("Erro no banco")
+
+    resultado = await repository.rejeitar_manutencao_alerta(
+        conn, 1, 2, "Inviavel"
+    )
+
+    assert resultado is None
+
+
+@pytest.mark.asyncio
+async def test_buscar_leituras_recentes_trata_erro():
+    conn = criar_conexao_mock()
+    conn.fetch.side_effect = Exception("Erro no banco")
+
+    resultado = await repository.buscar_leituras_recentes(conn, 1, 10)
+
+    assert resultado == []
+
+
 # ==========================================
 # MANUTENÇÕES
 # ==========================================
@@ -338,6 +378,14 @@ async def test_listar_manutencoes_detalhadas_trata_erro():
 
     assert await repository.listar_manutencoes_detalhadas(conn) == []
 
+@pytest.mark.asyncio
+async def test_listar_solicitacoes_manutencao_trata_erro():
+    conn = criar_conexao_mock()
+    conn.fetch.side_effect = Exception("Erro no banco")
+
+    resultado = await repository.listar_solicitacoes_manutencao(conn)
+
+    assert resultado == []
 
 @pytest.mark.asyncio
 async def test_obter_manutencao_por_id_trata_erro():

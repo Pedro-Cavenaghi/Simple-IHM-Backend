@@ -126,6 +126,122 @@ def test_sem_modelo_o_monitor_nao_faz_nada():
     assert "aviso" in status
 
 
+def test_alerta_nao_e_mantido_quando_armazenamento_falha(monkeypatch):
+    class ArmazenamentoSemCriacao(ArmazenamentoMemoria):
+        async def criar_alerta(self, dados):
+            return None
+
+    armazenamento = ArmazenamentoSemCriacao()
+    m, eventos = criar_monitor(armazenamento)
+    asyncio.run(m.iniciar(ModeloFalso()))
+
+    estado = m._estado(1)
+    estado.historico.extend([leitura() for _ in range(5)])
+
+    # Evita depender do cálculo real da linha de base neste teste
+    monkeypatch.setattr(m, "_linha_de_base", lambda historico: None)
+
+    avaliacao = Avaliacao(
+        anomalo=True,
+        pontuacao=1.0,
+        diagnostico="sobrecarga",
+        probabilidade=0.9,
+        minutos_ate_limite=None,
+    )
+
+    async def abrir():
+        await m._abrir(1, estado, avaliacao)
+
+    asyncio.run(abrir())
+
+    assert estado.alerta is None
+    assert estado.base_congelada is None
+    assert estado.historico_limpo is None
+    assert estado.leituras_anomalas_no_alerta == 0
+    assert eventos == []
+
+
+
+def test_armazenamento_postgres_encaminha_operacoes(monkeypatch):
+    chamadas = []
+    conexao = object()
+
+    class ContextoConexao:
+        async def __aenter__(self):
+            return conexao
+
+        async def __aexit__(self, *args):
+            pass
+
+    class Pool:
+        def acquire(self):
+            return ContextoConexao()
+
+    async def criar(conn, dados):
+        chamadas.append(("criar", conn, dados))
+        return {"id": 1, **dados}
+
+    async def atualizar(conn, alerta_id, dados):
+        chamadas.append(("atualizar", conn, alerta_id, dados))
+        return {"id": alerta_id, **dados}
+
+    async def encerrar(conn, alerta_id):
+        chamadas.append(("encerrar", conn, alerta_id))
+        return {"id": alerta_id, "encerrado_em": "agora"}
+
+    async def listar(conn, *args):
+        chamadas.append(("listar", conn, *args))
+        return []
+
+    async def maquinas(conn):
+        chamadas.append(("maquinas", conn))
+        return [{"id": 1}, {"id": 2}]
+
+    async def leituras(conn, maquina_id, limite):
+        chamadas.append(("leituras", conn, maquina_id, limite))
+        return [{"maquina_id": maquina_id}]
+
+    monkeypatch.setattr(monitor_module.repository, "criar_alerta", criar)
+    monkeypatch.setattr(monitor_module.repository, "atualizar_alerta", atualizar)
+    monkeypatch.setattr(monitor_module.repository, "encerrar_alerta", encerrar)
+    monkeypatch.setattr(monitor_module.repository, "listar_alertas", listar)
+    monkeypatch.setattr(
+        monitor_module.repository, "listar_maquinas_cadastradas", maquinas
+    )
+    monkeypatch.setattr(
+        monitor_module.repository, "buscar_leituras_recentes", leituras
+    )
+
+    armazenamento = monitor_module.ArmazenamentoPostgres(lambda: Pool())
+
+    async def executar():
+        dados = {"maquina_id": 1, "diagnostico": "sobrecarga"}
+
+        criado = await armazenamento.criar_alerta(dados)
+        atualizado = await armazenamento.atualizar_alerta(1, dados)
+        encerrado = await armazenamento.encerrar_alerta(1)
+        abertos = await armazenamento.listar_alertas_abertos()
+        ids = await armazenamento.listar_maquinas()
+        recentes = await armazenamento.leituras_recentes(1, 10)
+
+        return criado, atualizado, encerrado, abertos, ids, recentes
+
+    resultados = asyncio.run(executar())
+
+    assert resultados[0]["id"] == 1
+    assert resultados[1]["id"] == 1
+    assert resultados[2]["encerrado_em"] == "agora"
+    assert resultados[3] == []
+    assert resultados[4] == [1, 2]
+    assert resultados[5] == [{"maquina_id": 1}]
+
+    assert len(chamadas) == 6
+    assert all(chamada[1] is conexao for chamada in chamadas)
+
+    assert chamadas[3] == ("listar", conexao, None, True, 1000)
+    assert chamadas[5] == ("leituras", conexao, 1, 10)
+
+
 def test_alerta_so_abre_apos_anomalias_seguidas(monitor_falso):
     m, eventos = monitor_falso
     processar(m, *[leitura() for _ in range(5)])
@@ -395,6 +511,27 @@ def test_reiniciar_maquina_desconhecida_nao_faz_nada(monitor_com_base):
     asyncio.run(m.reiniciar_linha_de_base(99))
 
     assert eventos == []
+
+
+def test_erro_ao_reiniciar_linha_de_base_nao_propaga(monkeypatch, capsys):
+    m, _ = criar_monitor()
+    asyncio.run(m.iniciar(ModeloFalso()))
+
+    # Cria o estado da máquina que será reiniciada
+    m._estado(1)
+
+    async def falhar(_estado):
+        raise RuntimeError("falha simulada ao reiniciar")
+
+    monkeypatch.setattr(m, "_reiniciar", falhar)
+
+    # A exceção deve ser capturada pelo próprio monitor
+    asyncio.run(m.reiniciar_linha_de_base(1))
+
+    saida = capsys.readouterr().out
+
+    assert "Erro ao reiniciar a linha de base da máquina 1" in saida
+    assert "falha simulada ao reiniciar" in saida
 
 
 def test_iniciar_recupera_a_base_gravada_como_texto():
